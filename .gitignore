@@ -1,3 +1,5 @@
-/DESIGN.md
-/示范景区公开资料包
-/设计文档.docx
+__pycache__/
+*.pyc
+*.db
+.env
+.claude/
