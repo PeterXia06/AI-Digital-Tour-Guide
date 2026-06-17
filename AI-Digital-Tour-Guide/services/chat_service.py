@@ -1,36 +1,44 @@
-import os
+"""
+对话处理服务
+- 双阶段问答（知识库 → DeepSeek 兜底）
+- 关键词情感分析
+- 每日统计更新
+"""
 import re
+import time
+import httpx
 from datetime import date, datetime
+from typing import Tuple, Optional
 from sqlalchemy.orm import Session
 
-# ==========================================
-# 1. 导入 LangChain 超级大脑组件
-# ==========================================
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import DashScopeEmbeddings
-from langchain_community.chat_models import ChatTongyi
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-
-# ==========================================
-# 2. 导入原有业务模型
-# ==========================================
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 from models import Conversation, Stat
+from services.knowledge_service import search_knowledge, get_related_records
 
-# ⚠️ 注意：实战中建议将 API_KEY 写在队友配置的 .env 文件中
-# 这里为了快速联调，你可以先写死
-os.environ["DASHSCOPE_API_KEY"] = "sk-91b5c2013f354bf78ebd2475fa23bd73"
 
-# ==========================================
-# 3. 情感分析关键词 (保留队友原有逻辑，供管理大屏使用)
-# ==========================================
+# ── 情感分析关键词 ──
 POSITIVE_WORDS = re.compile(
     r"好|棒|喜欢|开心|满意|赞|不错|推荐|值得|漂亮|美|壮观|震撼|惊喜|太|很棒"
 )
 NEGATIVE_WORDS = re.compile(
     r"差|不好|失望|贵|坑|无聊|烂|后悔|不值|难吃|骗|乱|差劲"
 )
+
+# ── DeepSeek System Prompt ──
+SYSTEM_PROMPT = """你是「灵山胜境」景区的AI数字人导游，名叫"小灵"。
+
+你的特点：
+- 热情亲切，说话带一点禅意但不刻意
+- 回答风格口语化，像真人导游聊天
+- 尊称游客为"您"
+
+你必须遵守以下规则：
+1. 基于提供的【参考资料】回答问题，不要编造信息
+2. 如果参考资料中没有相关信息，请诚实告知游客，并建议他咨询景区工作人员
+3. 回答控制在200字以内，简洁清晰
+4. 回答末尾可以加一句相关小贴士（可选）
+5. 始终保持友善和耐心"""
+
 
 def analyze_emotion(text: str) -> str:
     """基于关键词的情感分析，返回 positive / negative / neutral"""
@@ -40,78 +48,113 @@ def analyze_emotion(text: str) -> str:
         return "negative"
     return "neutral"
 
-# ==========================================
-# 4. 初始化全局 LangChain RAG 引擎
-# ==========================================
-print("🧠 [ChatService] 正在唤醒高精度 Chroma 向量知识库与通义引擎...")
 
-embeddings = DashScopeEmbeddings(model="text-embedding-v3")
-# 确保 chroma_db_final 文件夹放在了项目根目录
-db = Chroma(persist_directory="./chroma_db_final", embedding_function=embeddings)
-retriever = db.as_retriever(search_kwargs={"k": 3})
+async def call_deepseek(user_input: str, context_records: list) -> str:
+    """
+    调用 DeepSeek API 生成回答。
 
-llm = ChatTongyi(model="qwen-turbo", temperature=0.5)
+    参数：
+        user_input: 用户问题
+        context_records: 知识库相关记录列表
 
-# 【完美融合】保留了队友的“小灵”人设，加入了严密的 RAG 纪律
-SYSTEM_TEMPLATE = """你是「灵山胜境」景区的AI数字人导游，名叫"小灵"。
+    返回：
+        AI 生成的回答文本
+    """
+    if not DEEPSEEK_API_KEY:
+        return _fallback_answer()
 
-你的特点：
-- 热情亲切，说话带一点禅意但不刻意
-- 回答风格口语化，像真人导游聊天
-- 尊称游客为"您"
+    # 构建上下文
+    context_parts = []
+    for i, rec in enumerate(context_records, 1):
+        context_parts.append(
+            f"【参考资料{i}】\n问题：{rec['question']}\n回答：{rec['answer']}"
+        )
+    context_text = "\n\n".join(context_parts) if context_parts else "暂无相关参考资料"
 
-你的任务是根据下面提供的【参考资料】来回答游客的问题。
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"【参考资料】\n{context_text}\n\n【游客问题】\n{user_input}"}
+    ]
 
-【参考资料】
-{context}
+    timeout = httpx.Timeout(10.0, read=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(2):  # 最多2次尝试
+            try:
+                resp = await client.post(
+                    f"{DEEPSEEK_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": DEEPSEEK_MODEL,
+                        "messages": messages,
+                        "max_tokens": 500,
+                        "temperature": 0.7,
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"].strip()
+                else:
+                    if attempt == 0:
+                        continue  # 重试一次
+            except Exception:
+                if attempt == 0:
+                    continue
 
-【导游守则】
-1. 必须基于【参考资料】回答问题，绝不能编造信息。
-2. 如果参考资料中没有相关信息，请诚实告知游客，并建议他咨询景区工作人员。
-3. 回答控制在200字以内，简洁清晰。
-4. 回答末尾可以加一句相关小贴士（可选）。
-5. 始终保持友善和耐心。
+    return _fallback_answer()
 
-游客的问题是：{question}
-"""
-prompt = ChatPromptTemplate.from_template(SYSTEM_TEMPLATE)
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+def _fallback_answer() -> str:
+    """DeepSeek API 不可用时的兜底回答"""
+    return (
+        "小灵暂时无法回答这个问题 😅\n\n"
+        "您可以试试问我这些问题：\n"
+        "• 灵山大佛有多高？\n"
+        "• 九龙灌浴几点表演？\n"
+        "• 灵山有什么好玩的？\n"
+        "• 门票多少钱？"
+    )
 
-rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()} 
-    | prompt 
-    | llm 
-    | StrOutputParser()
-)
 
-# ==========================================
-# 5. 对外暴露的核心处理流
-# ==========================================
 async def process_chat(
     db: Session,
     session_id: str,
     message: str
 ) -> dict:
     """
-    处理一次对话：LangChain 检索生成 + 情感分析 + 统计更新。
-    """
-    # ── 第一阶段：交给 LangChain 超级大脑处理问答 ──
-    try:
-        # 直接调用你的 RAG 流水线，一步到位完成检索和回答
-        answer = rag_chain.invoke(message)
-        source = "chroma_rag"
-    except Exception as e:
-        print(f"❌ 模型调用失败: {e}")
-        # 兜底回复保持原有风格
-        answer = "阿弥陀佛～小灵的脑电波暂时走神了，请稍后再试哦。"
-        source = "fallback"
+    处理一次对话：检索 + 情感分析 + 统计更新。
 
-    # ── 第二阶段：情感分析（供队友的 ECharts 大屏使用） ──
+    返回：
+        {
+            "answer": str,
+            "emotion": str,
+            "source": "knowledge_base" | "deepseek",
+            "spot_id": str | None
+        }
+    """
+    # ── 第一阶段：知识库检索 ──
+    best_match, score, source = search_knowledge(db, message, threshold=0.6)
+
+    answer = None
+    spot_id = None
+
+    if best_match:
+        answer = best_match["answer"]
+        spot_id = best_match.get("spot_id")
+        source = "knowledge_base"
+    else:
+        # ── 第二阶段：DeepSeek 兜底 ──
+        context_records = get_related_records(message, top_k=5)
+        answer = await call_deepseek(message, context_records)
+        source = "deepseek"
+        spot_id = context_records[0].get("spot_id") if context_records else None
+
+    # ── 情感分析 ──
     emotion = analyze_emotion(message)
 
-    # ── 第三阶段：保存对话记录（写进数据库） ──
+    # ── 保存对话记录 ──
     conv = Conversation(
         session_id=session_id,
         user_input=message,
@@ -122,19 +165,17 @@ async def process_chat(
     db.add(conv)
     db.commit()
 
-    # ── 第四阶段：更新每日统计 ──
+    # ── 更新每日统计 ──
     _update_stats(db, session_id, emotion)
 
     return {
         "answer": answer,
         "emotion": emotion,
         "source": source,
-        "spot_id": None, # Chroma 切片暂无单一景点ID映射，给 None 即可
+        "spot_id": spot_id,
     }
 
-# ==========================================
-# 6. 保留原有每日统计模块
-# ==========================================
+
 def _update_stats(db: Session, session_id: str, emotion: str):
     """
     更新每日统计数据：

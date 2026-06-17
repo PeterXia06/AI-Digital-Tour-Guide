@@ -9,7 +9,7 @@
 // ═══════════════════════════════════════════════
 // 常量 & 状态
 // ═══════════════════════════════════════════════
-const API_BASE = '/api';
+const CHAT_API = '/api';
 
 // 获取或创建 session_id
 let sessionId = localStorage.getItem('lingshan_session_id');
@@ -35,16 +35,16 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function loadGreeting() {
-    fetch(`${API_BASE}/admin/avatar`)
+    fetch(`${CHAT_API}/admin/avatar`)
         .then(r => r.json())
         .then(config => {
-            const greeting = config.greeting || '阿弥陀佛，欢迎来到灵山胜境！我是您的AI导游小灵，有什么可以帮您的吗？';
+            const greeting = config.greeting || '欢迎来到灵山胜境！我是您的AI导游小灵，有什么可以帮您的吗？';
             document.getElementById('welcome-msg').querySelector('p').textContent = greeting;
             speak(greeting);
         })
         .catch(() => {
             document.getElementById('welcome-msg').querySelector('p').textContent =
-                '阿弥陀佛，欢迎来到灵山胜境！我是您的AI导游小灵 🙏 您可以问我关于灵山大佛、梵宫、九龙灌浴的任何问题~';
+                '欢迎来到灵山胜境！我是您的AI导游小灵，您可以问我关于灵山大佛、梵宫、九龙灌浴的任何问题~';
         });
 }
 
@@ -140,11 +140,11 @@ function updateVoiceButton(active) {
     const icon = document.getElementById('mic-icon');
     if (active) {
         btn.classList.add('bg-red-500', 'animate-pulse');
-        btn.classList.remove('bg-white/10');
+        btn.classList.remove('bg-gray-100');
         icon.innerHTML = '<circle cx="12" cy="12" r="6" fill="currentColor"/>';
     } else {
         btn.classList.remove('bg-red-500', 'animate-pulse');
-        btn.classList.add('bg-white/10');
+        btn.classList.add('bg-gray-100');
         icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H9m3 0h3m-3-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />';
     }
 }
@@ -215,7 +215,7 @@ async function sendMessage() {
     const thinkingId = addThinking();
 
     try {
-        const resp = await fetch(`${API_BASE}/chat`, {
+        const resp = await fetch(`${CHAT_API}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sessionId, message: message }),
@@ -241,7 +241,7 @@ async function sendMessage() {
 
     } catch (err) {
         removeThinking(thinkingId);
-        addMessage('bot', '阿弥陀佛~小灵暂时无法回答，请稍后再试 🙏');
+        addMessage('bot', '小灵暂时无法回答，请稍后再试 🙏');
         updateStatus('idle');
     } finally {
         isProcessing = false;
@@ -318,7 +318,7 @@ function removeThinking(id) {
 }
 
 function updateStatus(status) {
-    const statusEl = document.getElementById('status-text');
+    const statusEl = document.getElementById('avatar-status');
     const placeholder = document.getElementById('avatar-placeholder');
 
     const statusMap = {

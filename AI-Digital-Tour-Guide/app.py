@@ -24,12 +24,14 @@ app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 # ── 注册 Admin 鉴权中间件 ──
 @app.middleware("http")
 async def admin_auth(request: Request, call_next):
-    # 仅拦截 /api/admin 路径
-    if request.url.path.startswith("/api/admin"):
+    # 仅拦截 /api/admin 路径，放行 verify 接口本身
+    path = request.url.path
+    if path.startswith("/api/admin") and path != "/api/admin/verify":
         token = request.headers.get("X-Admin-Token", "")
         from config import ADMIN_SECRET_KEY
         if token != ADMIN_SECRET_KEY:
-            raise HTTPException(status_code=403, detail="Forbidden: Invalid admin token")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"detail": "Forbidden: Invalid admin token"})
     response = await call_next(request)
     return response
 
@@ -55,7 +57,7 @@ async def index(request: Request):
 async def admin_page(request: Request):
     """管理后台"""
     # 【修复点】明确指定 request 和 name 参数
-    return templates.TemplateResponse(request=request, name="admin.html")
+    return templates.TemplateResponse(request=request, name="index.html")
 
 # ═══════════════════════════════════════════════════════
 # 游客端 API

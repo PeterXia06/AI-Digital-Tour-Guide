@@ -6,7 +6,7 @@ today = datetime.date.today()
 
 data = {"spots": [], "routes": [], "knowledge": [], "stats": [],
         "avatar_config": {"id": 1, "model_name": "", "model_url": "", "voice_name": "",
-                          "greeting": "阿弥陀佛，欢迎来到灵山胜境！我是您的AI导游小灵 🙏",
+                          "greeting": "欢迎来到灵山胜境！我是您的AI导游小灵",
                           "scale": 1.0, "is_active": False}}
 
 spots = [

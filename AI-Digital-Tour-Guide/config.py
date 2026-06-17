@@ -3,6 +3,15 @@
 从环境变量读取所有配置项，提供默认值。
 """
 import os
+from pathlib import Path
+
+# 自动加载项目根目录下的 .env 文件
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent / ".env"
+    load_dotenv(env_path)
+except ImportError:
+    pass
 
 # ── 数据库 ──
 # Render 部署时自动注入 DATABASE_URL（MySQL），本地留空则默认 SQLite
