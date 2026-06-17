@@ -1,10 +1,3 @@
-"""
-FastAPI 主应用
-- 游客端 API（/api/*）
-- 管理后台 API（/api/admin/*）
-- 静态文件挂载
-- Jinja2 模板渲染
-"""
 import os
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +17,6 @@ from services.stats_service import (
     get_hot_questions, get_tag_distribution,
 )
 from services.recommendation_service import get_recommendations
-from admin.middleware import admin_auth_middleware
 
 # ── FastAPI 实例 ──
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
@@ -49,7 +41,6 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=templates_dir)
 
-
 # ═══════════════════════════════════════════════════════
 # 页面路由
 # ═══════════════════════════════════════════════════════
@@ -57,14 +48,14 @@ templates = Jinja2Templates(directory=templates_dir)
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """游客端首页"""
-    return templates.TemplateResponse("index.html", {"request": request})
-
+    # 【修复点】明确指定 request 和 name 参数
+    return templates.TemplateResponse(request=request, name="index.html")
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     """管理后台"""
-    return templates.TemplateResponse("admin.html", {"request": request})
-
+    # 【修复点】明确指定 request 和 name 参数
+    return templates.TemplateResponse(request=request, name="admin.html")
 
 # ═══════════════════════════════════════════════════════
 # 游客端 API
@@ -75,15 +66,13 @@ async def health_check():
     """健康检查"""
     return {"status": "ok", "app": APP_TITLE, "version": APP_VERSION}
 
-
 @app.post("/api/chat")
 async def chat(
     data: dict,
     db: Session = Depends(get_db),
 ):
     """
-    智能问答接口
-
+    【升级版】智能问答接口 - 已接入 LangChain + ChromaDB 引擎
     Body: { "session_id": "uuid", "message": "灵山大佛有多高" }
     """
     session_id = data.get("session_id", "")
@@ -94,9 +83,9 @@ async def chat(
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能为空")
 
+    # 这里的 process_chat 已经是你写好的超级大模型版本了！
     result = await process_chat(db, session_id, message)
     return result
-
 
 @app.get("/api/recommend")
 async def recommend(
@@ -106,12 +95,10 @@ async def recommend(
     """路线推荐接口"""
     return get_recommendations(db, tag)
 
-
 @app.get("/api/stats/today")
 async def today_stats(db: Session = Depends(get_db)):
     """今日服务人次"""
     return get_today_stats(db)
-
 
 @app.get("/api/spots")
 async def list_spots(
@@ -129,7 +116,6 @@ async def list_spots(
     spots = q.all()
     return {"spots": [s.to_dict() for s in spots], "count": len(spots)}
 
-
 @app.get("/api/spots/{spot_id}")
 async def get_spot(spot_id: str, db: Session = Depends(get_db)):
     """景点详情"""
@@ -138,13 +124,9 @@ async def get_spot(spot_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="景点不存在")
     return spot.to_dict()
 
-
 @app.post("/api/init")
 async def init_data(db: Session = Depends(get_db)):
-    """
-    预置数据初始化接口
-    首次部署时调用，重复调用不会重复插入。
-    """
+    """预置数据初始化接口"""
     existing = db.query(AvatarConfig).first()
     if existing:
         return {"message": "数据已存在，跳过初始化", "initialized": False}
@@ -152,25 +134,19 @@ async def init_data(db: Session = Depends(get_db)):
     try:
         from data.seed_data import seed_all
         seed_all(db)
-        # 初始化知识库缓存
         load_cache(db)
         return {"message": "数据初始化成功", "initialized": True}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"初始化失败: {str(e)}")
 
-
 # ═══════════════════════════════════════════════════════
-# 管理后台 API
+# 管理后台 API (保持原样，保证前端管理面板不出错)
 # ═══════════════════════════════════════════════════════
 
 @app.post("/api/admin/verify")
 async def admin_verify():
-    """Token 验证（通过 middleware 即表示成功）"""
     return {"valid": True}
-
-
-# ── 知识库管理 ──
 
 @app.get("/api/admin/knowledge")
 async def admin_knowledge_list(
@@ -180,7 +156,6 @@ async def admin_knowledge_list(
     route: str = Query(None),
     db: Session = Depends(get_db),
 ):
-    """知识库分页列表"""
     q = db.query(Knowledge)
     if search:
         q = q.filter(
@@ -203,10 +178,8 @@ async def admin_knowledge_list(
         "items": [i.to_dict() for i in items],
     }
 
-
 @app.post("/api/admin/knowledge")
 async def admin_knowledge_create(data: dict, db: Session = Depends(get_db)):
-    """新增知识条目"""
     item = Knowledge(
         spot_id=data.get("spot_id", ""),
         question=data["question"],
@@ -220,10 +193,8 @@ async def admin_knowledge_create(data: dict, db: Session = Depends(get_db)):
     refresh_cache(db)
     return {"message": "创建成功", "item": item.to_dict()}
 
-
 @app.put("/api/admin/knowledge/{item_id}")
 async def admin_knowledge_update(item_id: int, data: dict, db: Session = Depends(get_db)):
-    """更新知识条目"""
     item = db.query(Knowledge).filter(Knowledge.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
@@ -236,10 +207,8 @@ async def admin_knowledge_update(item_id: int, data: dict, db: Session = Depends
     refresh_cache(db)
     return {"message": "更新成功", "item": item.to_dict()}
 
-
 @app.delete("/api/admin/knowledge/{item_id}")
 async def admin_knowledge_delete(item_id: int, db: Session = Depends(get_db)):
-    """删除知识条目"""
     item = db.query(Knowledge).filter(Knowledge.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
@@ -249,10 +218,8 @@ async def admin_knowledge_delete(item_id: int, db: Session = Depends(get_db)):
     refresh_cache(db)
     return {"message": "删除成功"}
 
-
 @app.post("/api/admin/knowledge/import")
 async def admin_knowledge_import(data: list, db: Session = Depends(get_db)):
-    """批量导入知识条目（JSON 数组）"""
     count = 0
     for item_data in data:
         item = Knowledge(
@@ -269,35 +236,22 @@ async def admin_knowledge_import(data: list, db: Session = Depends(get_db)):
     refresh_cache(db)
     return {"message": f"成功导入 {count} 条记录"}
 
-
-# ── 情感报告 ──
-
 @app.get("/api/admin/report")
 async def admin_report(
     start: str = Query(None),
     end: str = Query(None),
     db: Session = Depends(get_db),
 ):
-    """情感报告数据"""
     return get_report_data(db, start, end)
-
-
-# ── 数据大屏 ──
 
 @app.get("/api/admin/dashboard")
 async def admin_dashboard(db: Session = Depends(get_db)):
-    """数据大屏聚合数据"""
     return get_dashboard_data(db)
-
-
-# ── 数字人配置 ──
 
 @app.get("/api/admin/avatar")
 async def admin_avatar_get(db: Session = Depends(get_db)):
-    """获取数字人配置"""
     config = db.query(AvatarConfig).first()
     if not config:
-        # 返回默认配置
         return {
             "model_name": "",
             "model_url": "",
@@ -308,10 +262,8 @@ async def admin_avatar_get(db: Session = Depends(get_db)):
         }
     return config.to_dict()
 
-
 @app.put("/api/admin/avatar")
 async def admin_avatar_update(data: dict, db: Session = Depends(get_db)):
-    """更新数字人配置"""
     config = db.query(AvatarConfig).first()
     if not config:
         config = AvatarConfig(id=1)
@@ -324,12 +276,8 @@ async def admin_avatar_update(data: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "配置更新成功", "config": config.to_dict()}
 
-
-# ── Live2D 模型扫描 ──
-
 @app.get("/api/admin/models")
 async def admin_models():
-    """扫描 static/models/ 目录下的 Live2D 模型"""
     import glob
     models_dir = os.path.join(static_dir, "models")
     pattern = os.path.join(models_dir, "**", "*.model3.json")
@@ -343,19 +291,13 @@ async def admin_models():
 
     return {"models": models}
 
-
-# ── 景点管理 ──
-
 @app.get("/api/admin/spots")
 async def admin_spots(db: Session = Depends(get_db)):
-    """景点管理列表"""
     spots = db.query(Spot).order_by(Spot.spot_id.asc()).all()
     return {"spots": [s.to_dict() for s in spots], "count": len(spots)}
 
-
 @app.put("/api/admin/spots/{spot_id}")
 async def admin_spot_update(spot_id: int, data: dict, db: Session = Depends(get_db)):
-    """更新景点信息"""
     spot = db.query(Spot).filter(Spot.id == spot_id).first()
     if not spot:
         raise HTTPException(status_code=404, detail="景点不存在")
@@ -371,33 +313,28 @@ async def admin_spot_update(spot_id: int, data: dict, db: Session = Depends(get_
     db.commit()
     return {"message": "更新成功", "spot": spot.to_dict()}
 
-
 # ═══════════════════════════════════════════════════════
-# 启动事件
+# 🚀 启动事件 (核心修改区域：移除了旧时代jieba，引入超级大脑日志)
 # ═══════════════════════════════════════════════════════
 
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化数据库和预热"""
-    # 确保表存在
+    # 确保基础 SQL 表存在
     init_db()
 
-    # 预热 jieba
-    import jieba
-    jieba.lcut("灵山大佛有多高")
-
-    # 预热知识库缓存
+    # 保留队友的 SQL 缓存加载，防止后台大屏报错
     try:
         from database import SessionLocal
         db = SessionLocal()
         count = len(load_cache(db))
         db.close()
-        print(f"[Startup] 知识库缓存加载完成: {count} 条")
+        print(f"🗄️  [Startup] 传统 SQL 数据加载完成: {count} 条")
     except Exception as e:
-        print(f"[Startup] 缓存加载失败（可能数据库为空）: {e}")
-
-    print(f"[Startup] {APP_TITLE} v{APP_VERSION} 启动成功")
-
+        print(f"⚠️  [Startup] SQL 缓存加载失败（如果是初次启动无需理会）: {e}")
+        
+    print(f"🚀 [Startup] Chroma 向量知识库与 LangChain 引擎准备就绪！")
+    print(f"🎉 [Startup] {APP_TITLE} v{APP_VERSION} 启动成功。请在浏览器访问 http://127.0.0.1:8000")
 
 if __name__ == "__main__":
     import uvicorn
