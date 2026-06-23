@@ -11,6 +11,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <script src="/static/lib/live2dcubismcore.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.3.3/dist/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.5.0-beta/dist/cubism4.min.js"></script>
     <style>
         :root {
             --gold:    #BF8D3A;
@@ -382,18 +384,34 @@ function switchAdminTab(tabName){
 function logout(){_adminToken='';sessionStorage.removeItem('admin_token');switchToTourist()}
 document.getElementById('login-modal').addEventListener('click',function(e){if(e.target===this)closeLoginModal()});
 
-// Live2D Cubism 5 init
-(function(){
-    var placeholder=document.getElementById('avatar-placeholder');
-    if(typeof Live2DCubismCore==='undefined'){
-        console.log('[Live2D] Cubism SDK not loaded, using placeholder');
-        if(placeholder)placeholder.style.display='flex';
+// Live2D init (pixi-live2d-display CDN)
+var l2dApp=null;
+(async function(){
+    var c=document.getElementById('l2d-container');
+    var p=document.getElementById('avatar-placeholder');
+    if(!c)return;
+    if(typeof PIXI==='undefined'||typeof PIXI.live2d==='undefined'){
+        console.log('[L2D] SDK missing');
         return;
     }
-    console.log('[Live2D] Cubism Core v'+Live2DCubismCore.Version());
-    var canvas=document.getElementById('l2d-canvas');
-    if(canvas&&placeholder)placeholder.style.display='none';
-    console.log('[Live2D] Canvas ready, model: /static/models/haru_greeter_ja/runtime/haru_greeter_t05.model3.json');
+    try{
+        var w=c.clientWidth||400,h=c.clientHeight||500;
+        var app=new PIXI.Application({width:w,height:h,backgroundAlpha:0,antialias:true});
+        l2dApp=app;c.appendChild(app.view);
+        app.view.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%';
+        var m=await PIXI.live2d.Live2DModel.from('/static/models/Haru/Haru.model3.json',{autoInteract:false});
+        if(p)p.style.display='none';
+        var s=Math.min(w/m.width,h/m.height)*0.7;
+        m.scale.set(s);m.x=w/2;m.y=h*0.45;m.anchor.set(0.5,0.5);
+        app.stage.addChild(m);
+        console.log('[L2D] OK scale='+s.toFixed(3));
+        window.addEventListener('resize',function(){setTimeout(function(){
+            var nw=c.clientWidth||400,nh=c.clientHeight||500;
+            app.renderer.resize(nw,nh);
+            var ns=Math.min(nw/m.width,nh/m.height)*0.7;
+            m.scale.set(ns);m.x=nw/2;m.y=nh*0.45;
+        },200)});
+    }catch(e){console.warn('[L2D] '+e.message);if(l2dApp){l2dApp.destroy(true);l2dApp=null}}
 })();
 
 document.addEventListener('DOMContentLoaded',function(){
