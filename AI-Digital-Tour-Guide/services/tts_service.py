@@ -1,103 +1,50 @@
 """
-TTS 语音合成服务
-主方案：edge-tts（免费微软 Edge TTS，无需 API Key）
-备方案：百炼 CosyVoice（需 DashScope 开通 HTTP TTS 权限）
+TTS 语音合成服务 — 阿里云百炼 CosyVoice 超拟人语音
+纯血 tts_v2 引擎：CosyVoice 专属 WebSocket 通道，免疫 begin_time 解析 Bug。
+🎭 多模态中枢版：根据全局 CURRENT_CHARACTER 动态选择音色。
 """
 import os
-import re
-import io
-import logging
-import asyncio
-from typing import Optional
-from dotenv import load_dotenv, find_dotenv
+import uuid
+import dashscope
+import config
+from dashscope.audio.tts_v2 import SpeechSynthesizer
 
-load_dotenv(find_dotenv())
+dashscope.api_key = config.DASHSCOPE_API_KEY
 
-logger = logging.getLogger(__name__)
-
-TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge")  # "edge" 或 "dashscope"
-TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")  # 微软中文女声，自然情感
+_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "audio")
 
 
-def _clean_text(text: str) -> str:
-    """清理文本，去除 markdown 符号"""
-    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
-    text = re.sub(r'[*#`\-_~>|]', '', text)
-    text = re.sub(r'\n{2,}', '。', text)
-    text = re.sub(r'\n', '。', text)
-    text = re.sub(r'。{2,}', '。', text)
-    return text.strip()
-
-
-async def _edge_tts(text: str, voice: str) -> bytes:
-    """使用 edge-tts 库合成语音"""
-    import edge_tts
-
-    clean = _clean_text(text)
-    if not clean:
-        raise RuntimeError("清理后文本为空")
-
-    communicate = edge_tts.Communicate(clean, voice)
-    chunks = []
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            chunks.append(chunk["data"])
-    audio_bytes = b"".join(chunks)
-    if not audio_bytes:
-        raise RuntimeError("edge-tts 返回空音频")
-    logger.info(f"edge-tts 合成成功，{len(audio_bytes)} bytes")
-    return audio_bytes
-
-
-async def _dashscope_tts(text: str, model: str, voice: str) -> bytes:
-    """使用百炼 CosyVoice REST API 合成语音（需开通权限）"""
-    import httpx
-
-    api_key = os.getenv("DASHSCOPE_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("DASHSCOPE_API_KEY 未配置")
-
-    clean = _clean_text(text)
-    payload = {
-        "model": model,
-        "input": {"text": clean},
-        "parameters": {"voice": voice, "format": "mp3", "sample_rate": 22050},
-    }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer",
-            json=payload,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"DashScope TTS 失败: HTTP {resp.status_code}")
-        data = resp.json()
-        audio_url = data.get("output", {}).get("audio_url")
-        if not audio_url:
-            raise RuntimeError(f"TTS 响应无 audio_url")
-        dl = await client.get(audio_url)
-        if dl.status_code != 200:
-            raise RuntimeError(f"下载音频失败: HTTP {dl.status_code}")
-        logger.info(f"DashScope TTS 合成成功，{len(dl.content)} bytes")
-        return dl.content
-
-
-async def text_to_speech(
-    text: str,
-    model: Optional[str] = None,
-    voice: Optional[str] = None,
-) -> bytes:
+def generate_aliyun_tts(text: str) -> str:
     """
-    将文本转为 MP3 音频二进制数据。
-    根据 TTS_PROVIDER 环境变量选择引擎（默认 edge-tts）。
+    tts_v2 引擎：自动处理 WebSocket 协议，返回纯净 MP3 字节流。
+    🎭 动态读取当前激活角色的专属音色参数。
     """
-    provider = os.getenv("TTS_PROVIDER", TTS_PROVIDER)
+    os.makedirs(_OUTPUT_DIR, exist_ok=True)
 
-    if provider == "dashscope":
-        return await _dashscope_tts(
-            text,
-            model=model or os.getenv("TTS_MODEL", "cosyvoice-v1"),
-            voice=voice or os.getenv("TTS_VOICE", "longxiaochun"),
-        )
-    else:
-        return await _edge_tts(text, voice=voice or TTS_VOICE)
+    # 🚨 动态拦截：抓取当前激活角色的专属 TTS 参数
+    active_id = config.CURRENT_CHARACTER
+    profile = config.CHARACTER_PROFILES.get(active_id, config.CHARACTER_PROFILES["hiyori"])
+    tts_model = profile["tts_model"]
+    tts_voice = profile["tts_voice"]
+    char_name = profile["name"]
+
+    file_name = f"response_{uuid.uuid4().hex[:8]}.mp3"
+    file_path = os.path.join(_OUTPUT_DIR, file_name)
+
+    print(f"[TTS] 🎭 当前角色 {char_name} → 音色 {tts_voice} | 模型 {tts_model}")
+    print(f"[TTS] 🚀 合成文本: {text[:30]}...")
+
+    try:
+        synthesizer = SpeechSynthesizer(model=tts_model, voice=tts_voice)
+        audio_bytes = synthesizer.call(text)
+
+        with open(file_path, 'wb') as f:
+            f.write(audio_bytes)
+
+        audio_url = f"/static/audio/{file_name}"
+        print(f"[TTS] ✅ 已落盘: {file_name} ({len(audio_bytes)} bytes)")
+        return audio_url
+
+    except Exception as e:
+        print(f"[TTS] ❌ 合成失败: {e}")
+        raise RuntimeError(f"百炼 TTS 调用失败: {e}")

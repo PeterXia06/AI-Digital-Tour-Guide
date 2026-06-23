@@ -36,18 +36,26 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function loadGreeting() {
-    fetch(`${CHAT_API}/admin/avatar`)
-        .then(r => r.json())
-        .then(config => {
-            const greeting = config.greeting || '欢迎来到灵山胜境！我是您的AI导游小灵，有什么可以帮您的吗？';
+    // 🎭 多模态中枢：静默显示欢迎语（不播放 TTS，避免与问答语音串音）
+    fetch('/api/admin/character')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var profile = data.profile;
+            var name = profile.name ? profile.name.split('(')[0] : '小灵';
+            var greeting = '欢迎来到灵山胜境！我是您的AI导游' + name + '，有什么可以帮您的吗？';
             document.getElementById('welcome-msg').querySelector('p').textContent = greeting;
-            // 用 AudioManager 播放 TTS 欢迎语
-            var greetingUrl = `${CHAT_API}/tts?text=${encodeURIComponent(greeting)}`;
-            audioManager.play(greetingUrl);
         })
-        .catch(() => {
-            document.getElementById('welcome-msg').querySelector('p').textContent =
-                '欢迎来到灵山胜境！我是您的AI导游小灵，您可以问我关于灵山大佛、梵宫、九龙灌浴的任何问题~';
+        .catch(function() {
+            fetch(CHAT_API + '/admin/avatar')
+                .then(function(r) { return r.json(); })
+                .then(function(config) {
+                    document.getElementById('welcome-msg').querySelector('p').textContent =
+                        config.greeting || '欢迎来到灵山胜境！我是您的AI导游小灵，有什么可以帮您的吗？';
+                })
+                .catch(function() {
+                    document.getElementById('welcome-msg').querySelector('p').textContent =
+                        '欢迎来到灵山胜境！我是您的AI导游小灵，您可以问我关于灵山大佛、梵宫、九龙灌浴的任何问题~';
+                });
         });
 }
 
@@ -205,13 +213,14 @@ async function sendMessage() {
         // 移除思考动画
         removeThinking(thinkingId);
 
-        // 添加机器人消息
-        addMessage('bot', data.answer, data.source, data.spot_id);
-
-        // 语音播报（后端 CosyVoice TTS）
+        // 🚨 偏差三修复：先加载音频获取真实时长，再启动打字机
+        var audioDurationSec = 0;
         if (data.audio_url && audioManager) {
-            audioManager.play(data.audio_url);
+            audioDurationSec = await audioManager.play(data.audio_url);
         }
+
+        // 添加机器人消息（打字机用真实音频时长对齐）
+        addMessage('bot', data.answer, data.source, data.spot_id, audioDurationSec * 1000);
 
         // 正面消息触发笑脸
         if (data.emotion === 'positive') {
@@ -246,22 +255,29 @@ function quickAsk(tag) {
 // ═══════════════════════════════════════════════
 // UI 辅助
 // ═══════════════════════════════════════════════
+/**
+ * 打字机效果 — 快速出字，让心急的游客可以直接阅读
+ * 总时长上限 2 秒，单字间隔 15~40ms
+ */
 function typewriter(element, fullText, durationMs) {
     var chars = fullText.length;
     if (chars === 0) return;
-    // 估算：音频时长 / 字符数，但至少 30ms/字（保证可读性）
-    var interval = Math.max(30, durationMs / chars);
+    // 快速模式：总时长不超过 2 秒，单字至少 15ms
+    var cappedMs = Math.min(durationMs || chars * 30, 2000);
+    var interval = Math.max(15, Math.min(40, cappedMs / chars));
     var i = 0;
     var timer = setInterval(function () {
-        i++;
+        // 一次吐出 2~3 个字符加速显示
+        var step = chars > 40 ? 2 : 1;
+        i += step;
+        if (i >= chars) { i = chars; clearInterval(timer); }
         element.textContent = fullText.substring(0, i);
         var container = document.getElementById('chat-messages');
         container.scrollTop = container.scrollHeight;
-        if (i >= chars) clearInterval(timer);
     }, interval);
 }
 
-function addMessage(role, text, source, spotId) {
+function addMessage(role, text, source, spotId, audioDurationMs) {
     var container = document.getElementById('chat-messages');
     var div = document.createElement('div');
     div.className = 'flex gap-2 ' + (role === 'user' ? 'justify-end' : '');
@@ -273,9 +289,14 @@ function addMessage(role, text, source, spotId) {
             (source ? '<span class="text-xs text-gray-400 mt-1 block">来源：' + (source === 'knowledge_base' ? '📚 知识库' : '🤖 AI助手') + '</span>' : '') +
             '</div>';
         var p = div.querySelector('p');
-        // 打字机效果：根据音频时长同步
-        var duration = (audioManager && audioManager.getDuration() > 0) ? audioManager.getDuration() * 1000 : text.length * 80;
-        typewriter(p, text, duration);
+        // 🚨 偏差三修复：音频反向控制打字机速度
+        // 根据真实音频时长计算单字打印间隔
+        var durationMs = (audioDurationMs && audioDurationMs > 0)
+            ? audioDurationMs
+            : (audioManager && audioManager.getDuration() > 0
+                ? audioManager.getDuration() * 1000
+                : text.length * 80);
+        typewriter(p, text, durationMs);
     } else {
         div.innerHTML = '<div class="msg-user px-3 py-2 max-w-[80%] text-sm shadow-sm">' +
             '<p class="leading-relaxed">' + escapeHtml(text) + '</p>' +

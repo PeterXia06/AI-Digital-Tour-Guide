@@ -261,23 +261,32 @@
         </section>
         <section id="tab-avatar" class="admin-section view-hidden">
             <h2 class="text-lg font-bold text-[var(--brown)] mb-4">数字人形象管理</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div class="card p-5">
-                    <h3 class="font-semibold text-[var(--brown)] mb-4">形象配置</h3>
-                    <form id="avatar-form" class="space-y-4">
-                        <div><label class="text-xs text-[var(--text-lt)]">Live2D 模型</label><select id="av-model" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1 bg-white"></select></div>
-                        <div><label class="text-xs text-[var(--text-lt)]">语音选择</label><select id="av-voice" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1 bg-white"></select></div>
-                        <div><label class="text-xs text-[var(--text-lt)]">缩放比例</label><input id="av-scale" type="range" min="0.5" max="2" step="0.1" value="1" class="w-full mt-1"></div>
-                        <div><label class="text-xs text-[var(--text-lt)]">欢迎语</label><input id="av-greeting" type="text" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1 bg-white"></div>
-                        <div class="flex items-center gap-2"><input id="av-active" type="checkbox" class="rounded"><label class="text-sm text-[var(--text)]">启用 Live2D</label></div>
-                        <button type="button" onclick="saveAvatar()" class="w-full py-2 bg-[var(--gold)] text-white rounded-lg text-sm hover:opacity-90">保存配置</button>
-                    </form>
+            <!-- 🎭 角色切换卡片（事件委托，无内联 onclick） -->
+            <div class="card p-5 mb-5">
+                <h3 class="font-semibold text-[var(--brown)] mb-3">🎭 角色切换（秒级热切换）</h3>
+                <p class="text-xs text-[var(--text-lt)] mb-3">切换将同时改变 Live2D 模型与 TTS 语音音色</p>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <button class="char-switch-btn px-5 py-2.5 rounded-xl text-sm font-medium transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                            data-character="hiyori"
+                            style="background:linear-gradient(135deg,#BF8D3A,#D4A94E);color:#fff;">
+                        👩 小灵 · 元气女声
+                    </button>
+                    <button class="char-switch-btn px-5 py-2.5 rounded-xl text-sm font-medium transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                            data-character="chitose"
+                            style="background:linear-gradient(135deg,#6B5B8A,#8B7DB8);color:#fff;">
+                        🧑 千岁 · 清朗男声
+                    </button>
+                    <span id="char-status" class="text-xs text-[var(--text-lt)] ml-2"></span>
                 </div>
-                <div class="card p-5 flex flex-col items-center justify-center">
-                    <h3 class="font-semibold text-[var(--brown)] mb-4">实时预览</h3>
-                    <div class="w-44 h-44 bg-[var(--bg)] rounded-full flex items-center justify-center text-5xl mb-3">🧘</div>
-                    <button onclick="testAvatar()" class="px-5 py-2 bg-[var(--green)] text-white rounded-lg text-sm hover:opacity-90">测试欢迎语</button>
+            </div>
+            <div class="card p-5">
+                <h3 class="font-semibold text-[var(--brown)] mb-4">欢迎语 & 语音测试</h3>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <input id="av-greeting" type="text" class="flex-1 min-w-[260px] border border-[var(--border)] rounded-lg px-3 py-2 text-sm bg-white" placeholder="欢迎来到灵山胜境！我是您的AI导游...">
+                    <button onclick="saveAvatar()" class="px-4 py-2 bg-[var(--gold)] text-white rounded-lg text-sm hover:opacity-90 shrink-0">保存</button>
+                    <button onclick="testAvatarTTS()" class="px-4 py-2 bg-[var(--green)] text-white rounded-lg text-sm hover:opacity-90 shrink-0">🎙 测试语音</button>
                 </div>
+                <p id="tts-test-status" class="text-xs text-[var(--text-lt)] mt-2 hidden"></p>
             </div>
         </section>
         <section id="tab-report" class="admin-section view-hidden">
@@ -389,10 +398,10 @@ document.getElementById('login-modal').addEventListener('click',function(e){if(e
 </script>
 
 <!-- Live2DManager 类定义（UMD 全局模式，依赖 window.PIXI + PIXI.live2d） -->
-<script src="/static/js/live2d-manager.js?v=3"></script>
+<script src="/static/js/live2d-manager.js?v=4"></script>
 <!-- AudioManager：Web Audio API 播放 + 实时音量分析 -->
 <script src="/static/js/audio-manager.js"></script>
-<!-- Live2D 数字人初始化 -->
+<!-- 🎭 多模态中枢：Live2D 数字人初始化（先问 API 再加载角色） -->
 <script>
 var l2dManager = new Live2DManager({
     canvasId: 'l2d-canvas',
@@ -402,7 +411,8 @@ var l2dManager = new Live2DManager({
 });
 l2dManager.init().then(function(ok){
     if (!ok) return;
-    l2dManager.loadModel('/static/models/hiyori/hiyori_free_t08.model3.json');
+    // 🎭 异步查询中枢系统，按当前角色加载对应模型 + 音色
+    l2dManager.fetchAndLoadCharacter();
 }).catch(function(e){
     console.error('[Live2D] 初始化失败:', e);
     var p = document.getElementById('avatar-placeholder');

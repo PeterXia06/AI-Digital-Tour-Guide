@@ -14,7 +14,6 @@ except ImportError:
     pass
 
 # ── 数据库 ──
-# Render 部署时自动注入 DATABASE_URL（MySQL），本地留空则默认 SQLite
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///./app.db"
@@ -31,16 +30,34 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 # ── Admin 鉴权 ──
 ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "lingshan-admin-2026")
 
-# ── Azure TTS（可选） ──
-AZURE_TTS_KEY = os.getenv("AZURE_TTS_KEY", "")
-AZURE_TTS_REGION = os.getenv("AZURE_TTS_REGION", "eastasia")
-
-# ── TTS 语音合成 ──
-# TTS_PROVIDER: "edge" (免费微软 Edge TTS) 或 "dashscope" (百炼 CosyVoice)
-TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge")
-TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")  # 微软中文女声
-TTS_MODEL = os.getenv("TTS_MODEL", "cosyvoice-v1")  # 仅 dashscope 模式使用
+# ── 阿里云百炼 CosyVoice TTS ──
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+TTS_MODEL = os.getenv("TTS_MODEL", "cosyvoice-v1")
+TTS_VOICE = os.getenv("TTS_VOICE", "longxiaochun")  # 龙小淳：超拟人元气女声（默认）
+
+# ── 👥 多模态角色资产字典 ──
+# 绑定 Live2D 模型路径与专属 TTS 音色，支持秒级热切换
+CHARACTER_PROFILES = {
+    "hiyori": {
+        "name": "小灵 (元气女声)",
+        "model_url": "/resources/live2d/hiyori/hiyori_free_t08.model3.json",
+        "tts_model": "cosyvoice-v1",
+        "tts_voice": "longxiaochun",       # 龙小淳：超拟人元气女声
+        "scale": 0.18,                      # 自适应缩放倍率（会被引擎按画布高度微调）
+        "y_offset": 100,                    # Y 轴偏移 px
+    },
+    "chitose": {
+        "name": "千岁 (清朗男声)",
+        "model_url": "/resources/live2d/chitose/chitose.model3.json",
+        "tts_model": "cosyvoice-v1",
+        "tts_voice": "longxiaocheng",       # 龙小诚：清亮阳光男声
+        "scale": 0.12,
+        "y_offset": 80,
+    },
+}
+
+# 🚨 运行时状态：当前激活的角色 ID（默认 hiyori）
+CURRENT_CHARACTER = os.getenv("CURRENT_CHARACTER", "hiyori")
 
 # ── 应用设置 ──
 APP_TITLE = "灵山胜境 AI 数字人导游"

@@ -23,6 +23,7 @@
         this._onStartCb = null;
         this._onEndCb = null;
         this._gainNode = null;      // GainNode（音量控制）
+        this._currentVolume = 0;    // 平滑后的当前音量（黄金比例 lerp）
     }
 
     AudioManager.prototype._ensureContext = function () {
@@ -75,10 +76,12 @@
             log('✓ 音频就绪 ' + this._duration.toFixed(1) + 's');
 
             this._start();
+            return this._duration;
         } catch (e) {
             log('✗ 音频加载失败: ' + e.message, 'error');
             console.error(e);
             if (this._onEndCb) this._onEndCb();
+            return 0;
         }
     };
 
@@ -115,24 +118,41 @@
 
     /**
      * 获取实时音量 (0 ~ 1)
-     * 供 Live2D ticker 每帧调用
+     * 供 Live2D ticker 每帧调用（旧版兼容，保留此方法）
      */
     AudioManager.prototype.getVolume = function () {
-        if (!this._playing || !this._analyser) return 0;
+        return this.getSmoothedVolume();
+    };
+
+    /**
+     * 🚨 偏差二修复：带底噪阈值 + 黄金比例 lerp 的平滑音量
+     * 解决 AnalyserNode 频域数据平均音量过小、嘴巴“嘟嘟囔囔”不张开的问题
+     * @returns {number} 0~1 平滑音量
+     */
+    AudioManager.prototype.getSmoothedVolume = function () {
+        if (!this._playing || !this._analyser) {
+            this._currentVolume = 0;
+            return 0;
+        }
 
         var dataArray = new Uint8Array(this._analyser.frequencyBinCount);
         this._analyser.getByteFrequencyData(dataArray);
 
-        // 计算 RMS (均方根) 音量
+        // 1. 提取有效能量（去除极微弱的环境底噪）
         var sum = 0;
         for (var i = 0; i < dataArray.length; i++) {
-            var v = dataArray[i] / 255;
-            sum += v * v;
+            sum += dataArray[i];
         }
-        var rms = Math.sqrt(sum / dataArray.length);
+        var average = sum / dataArray.length;
 
-        // 将 RMS 映射到更宽的范围，让嘴巴动得更明显
-        return Math.min(1, rms * 3);
+        // 2. 映射到 0~1 区间，底噪阈值 < 10 视为静音
+        var targetVolume = average > 10 ? (average / 100) : 0;
+        targetVolume = Math.min(1, targetVolume);
+
+        // 3. 黄金比例 Lerp 平滑插值（0.4 最接近人类肌肉反应）
+        this._currentVolume += (targetVolume - this._currentVolume) * 0.4;
+
+        return this._currentVolume;
     };
 
     AudioManager.prototype.isPlaying = function () {

@@ -178,6 +178,7 @@ async function importKnowledge(event) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    // ── 知识库表单提交 ──
     var form = document.getElementById('knowledge-form');
     if (form) {
         form.addEventListener('submit', async function(e) {
@@ -202,60 +203,98 @@ document.addEventListener('DOMContentLoaded', function() {
             } catch (err) { alert('保存失败'); }
         });
     }
+
+    // ── 🎭 角色切换：事件委托（零内联 onclick） ──
+    document.querySelectorAll('.char-switch-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            var characterId = e.currentTarget.getAttribute('data-character');
+            if (characterId) switchCharacter(characterId);
+        });
+    });
 });
 
 // ═══════════════════════════════════════════════
-// 数字人配置
+// 数字人配置（🎭 多模态中枢版）
 // ═══════════════════════════════════════════════
+
+/** 查询当前激活角色并更新状态标签 */
+async function updateCharStatus() {
+    try {
+        var resp = await fetch('/api/admin/character');
+        var data = await resp.json();
+        var status = document.getElementById('char-status');
+        if (status && data.profile) {
+            status.textContent = '当前: ' + data.profile.name;
+        }
+        // 高亮当前角色按钮
+        document.querySelectorAll('.char-switch-btn').forEach(function(btn) {
+            var isActive = btn.getAttribute('data-character') === data.character_id;
+            btn.style.opacity = isActive ? '1' : '0.55';
+            btn.style.boxShadow = isActive ? '0 0 0 3px rgba(191,141,58,.5)' : '';
+        });
+    } catch (e) { console.error('Update char status error:', e); }
+}
+
+/** 🎭 管理员切换角色（由事件委托调用，characterId 从 data-character 属性自动抓取） */
+async function switchCharacter(characterId) {
+    if (!characterId) return;
+
+    try {
+        var resp = await adminFetch(API_BASE + '/character/switch', {
+            method: 'POST',
+            body: JSON.stringify({ character_id: characterId }),
+        });
+        var data = await resp.json();
+        var status = document.getElementById('char-status');
+        if (status) status.textContent = '当前: ' + data.name;
+
+        // 即时更新按钮高亮
+        document.querySelectorAll('.char-switch-btn').forEach(function(btn) {
+            var isActive = btn.getAttribute('data-character') === characterId;
+            btn.style.opacity = isActive ? '1' : '0.55';
+            btn.style.boxShadow = isActive ? '0 0 0 3px rgba(191,141,58,.5)' : '';
+        });
+
+        alert('角色已切换为: ' + data.name + '\n游客刷新页面后将看到新角色。');
+    } catch (e) { alert('切换失败: ' + e.message); }
+}
+
 async function loadAvatarConfig() {
     try {
-        var modelsResp = await adminFetch(API_BASE + '/models');
-        var modelsData = await modelsResp.json();
-        var modelSelect = document.getElementById('av-model');
-        if (modelSelect) {
-            modelSelect.innerHTML = '<option value=\"\">不使用 Live2D</option>' + modelsData.models.map(function(m) { return '<option value=\"' + m.url + '\">' + m.name + '</option>'; }).join('');
-        }
-        // 【修复点】语音列表异步加载，增加 onvoiceschanged 监听
-        if (window.speechSynthesis) {
-            var voiceSelect = document.getElementById('av-voice');
-            var loadVoices = function() {
-                var voices = speechSynthesis.getVoices();
-                var zhVoices = voices.filter(function(v) { return v.lang.indexOf('zh') === 0; });
-                if (voiceSelect && zhVoices.length) {
-                    voiceSelect.innerHTML = zhVoices.map(function(v) { return '<option value=\"' + v.name + '\">' + v.name + '</option>'; }).join('');
-                }
-            };
-            loadVoices();
-            // Chrome 等浏览器异步加载语音，监听事件触发二次加载
-            speechSynthesis.onvoiceschanged = loadVoices;
-        }
+        updateCharStatus();
         var resp = await adminFetch(API_BASE + '/avatar');
         var config = await resp.json();
-        if (document.getElementById('av-model')) document.getElementById('av-model').value = config.model_url || '';
-        if (document.getElementById('av-voice')) document.getElementById('av-voice').value = config.voice_name || '';
-        if (document.getElementById('av-scale')) document.getElementById('av-scale').value = config.scale || 1;
-        if (document.getElementById('av-greeting')) document.getElementById('av-greeting').value = config.greeting || '';
-        if (document.getElementById('av-active')) document.getElementById('av-active').checked = config.is_active || false;
+        var greetingEl = document.getElementById('av-greeting');
+        if (greetingEl) greetingEl.value = config.greeting || '';
     } catch (e) { console.error('Avatar error:', e); }
 }
 
 async function saveAvatar() {
-    var data = {
-        model_url: document.getElementById('av-model') ? document.getElementById('av-model').value : '',
-        voice_name: document.getElementById('av-voice') ? document.getElementById('av-voice').value : '',
-        scale: parseFloat(document.getElementById('av-scale') ? document.getElementById('av-scale').value : 1),
-        greeting: document.getElementById('av-greeting') ? document.getElementById('av-greeting').value : '',
-        is_active: document.getElementById('av-active') ? document.getElementById('av-active').checked : false,
-    };
-    try { await adminFetch(API_BASE + '/avatar', { method: 'PUT', body: JSON.stringify(data) }); alert('配置保存成功'); }
-    catch (e) { alert('保存失败'); }
+    var greeting = document.getElementById('av-greeting') ? document.getElementById('av-greeting').value : '';
+    try {
+        await adminFetch(API_BASE + '/avatar', { method: 'PUT', body: JSON.stringify({ greeting: greeting }) });
+        alert('欢迎语已保存');
+    } catch (e) { alert('保存失败'); }
 }
 
-function testAvatar() {
-    var greeting = document.getElementById('av-greeting') ? document.getElementById('av-greeting').value : '欢迎来到灵山胜境！';
-    var utterance = new SpeechSynthesisUtterance(greeting);
-    utterance.lang = 'zh-CN'; utterance.rate = 0.95;
-    speechSynthesis.speak(utterance);
+/** 🎙 通过后端 TTS API 测试当前音色 */
+async function testAvatarTTS() {
+    var greeting = document.getElementById('av-greeting') ? document.getElementById('av-greeting').value : '欢迎来到灵山胜境！我是您的AI导游。';
+    var status = document.getElementById('tts-test-status');
+    if (status) { status.classList.remove('hidden'); status.textContent = '⏳ 正在生成语音...'; }
+
+    try {
+        if (window.AudioManager) {
+            var am = new AudioManager();
+            await am.play('/api/tts?text=' + encodeURIComponent(greeting));
+        } else {
+            var audio = new Audio('/api/tts?text=' + encodeURIComponent(greeting));
+            audio.play();
+        }
+        if (status) { status.textContent = '✅ 播放中...'; }
+    } catch (e) {
+        if (status) { status.textContent = '❌ TTS 失败: ' + e.message; }
+    }
 }
 
 // ═══════════════════════════════════════════════

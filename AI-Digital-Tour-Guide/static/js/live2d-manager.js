@@ -1,6 +1,6 @@
 /**
  * Live2DManager — PixiJS v7 + Cubism 4 + pixi-live2d-display v0.4.0
- * 零补丁，纯原生企业级稳定组合
+ * 音画同步升级版：beforeModelUpdate 钩子 + 2.5x 口型放大
  */
 (function () {
     'use strict';
@@ -24,7 +24,7 @@
         this._initOk = false;
         this._idleTimer = null;
         this._idleInterval = opts.idleInterval || 8000;
-        this._lipTicker = null;       // 唇形同步 ticker 引用
+        this._lipCallback = null;     // beforeModelUpdate 回调引用（用于 off）
         this._lipAudio = null;        // AudioManager 引用
         this._currentLip = 0;         // 当前平滑后的口型值
         this._currentModelUrl = null;
@@ -88,12 +88,18 @@
         }
     };
 
-    Live2DManager.prototype.loadModel = function (modelUrl, scale) {
+    /**
+     * 加载 Live2D 模型
+     * @param {string} modelUrl - 模型 JSON 路径
+     * @param {object} [profile]  - 角色配置（scale, y_offset, name 等）
+     */
+    Live2DManager.prototype.loadModel = function (modelUrl, profile) {
         if (!this._initOk) { log('✗ PixiJS 未就绪', 'error'); return; }
 
         var loadId = ++this._loadId;
         this.unloadModel();
-        log('⏳ 加载模型: ' + modelUrl);
+        profile = profile || {};
+        log('⏳ 加载模型: ' + modelUrl + (profile.name ? ' (' + profile.name + ')' : ''));
 
         var self = this;
 
@@ -118,16 +124,16 @@
             // 自适应缩放：高度占画布 90%
             var targetScale = (self._app.screen.height * 0.9) / rawH;
             if (!isFinite(targetScale) || targetScale > 5) {
-                log('⚠️ 缩放异常，强制降级为 0.15', 'warn');
-                targetScale = 0.15;
+                log('⚠️ 缩放异常，强制降级为 ' + (profile.scale || 0.15), 'warn');
+                targetScale = profile.scale || 0.15;
             }
             model.scale.set(targetScale);
 
-            // X 轴居中，Y 轴居中
+            // X 轴居中，Y 轴居中 + 角色专属偏移
             var finalW = rawW * targetScale;
             var finalH = rawH * targetScale;
             model.x = (self._app.screen.width - finalW) / 2;
-            model.y = (self._app.screen.height - finalH) / 2;
+            model.y = (self._app.screen.height - finalH) / 2 + (profile.y_offset || 0);
 
             // 推上舞台
             self._app.stage.addChild(model);
@@ -157,6 +163,7 @@
 
     Live2DManager.prototype.unloadModel = function () {
         this.stopIdle();
+        this.disableLipSync();
         this._ready = false;
         if (this._model) {
             try {
@@ -168,9 +175,37 @@
         this._currentModelUrl = null;
     };
 
-    Live2DManager.prototype.switchModel = function (modelUrl, scale) {
+    Live2DManager.prototype.switchModel = function (modelUrl, profile) {
         this.setLipSync(0);
-        this.loadModel(modelUrl, scale);
+        this.loadModel(modelUrl, profile);
+    };
+
+    /**
+     * 🎭 多模态中枢：从后端 API 查询当前激活角色并加载对应模型
+     * 异步方法，先问 API "我是谁"，再按需加载模型资产。
+     */
+    Live2DManager.prototype.fetchAndLoadCharacter = async function () {
+        if (!this._initOk) { log('✗ PixiJS 未就绪，跳过角色加载', 'error'); return; }
+
+        try {
+            log('🎭 查询中枢系统当前角色...');
+            var resp = await fetch('/api/admin/character');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            var data = await resp.json();
+            var profile = data.profile;
+            var characterId = data.character_id;
+
+            log('🎭 接收到中枢指令 → ' + profile.name + ' (ID: ' + characterId + ')');
+            this.loadModel(profile.model_url, profile);
+
+        } catch (e) {
+            log('✗ 角色查询失败，降级加载默认 hiyori: ' + e.message, 'warn');
+            this.loadModel('/static/models/hiyori/hiyori_free_t08.model3.json', {
+                name: '小灵 (默认)',
+                scale: 0.18,
+                y_offset: 100,
+            });
+        }
     };
 
     Live2DManager.prototype.playMotion = function (group, index) {
@@ -200,32 +235,55 @@
     };
 
     /**
-     * 启用唇形同步：每帧从 AudioManager 读取音量，平滑驱动嘴巴开合
+     * 启用唇形同步 — 使用 beforeModelUpdate 钩子避免与呼吸动画竞态
      * @param {AudioManager} audioManager
      */
     Live2DManager.prototype.enableLipSync = function (audioManager) {
-        if (!this._app || !this._model) return;
+        if (!this._app || !this._model || !this._model.internalModel) return;
         this.disableLipSync();
+
         this._lipAudio = audioManager;
         this._currentLip = 0;
         var self = this;
-        this._lipTicker = this._app.ticker.add(function () {
+
+        // 🚨 偏差一修复：用 beforeModelUpdate 替代 app.ticker
+        // 在引擎渲染前一刻强行注入口型，不会被 Live2D 内部呼吸动画覆盖
+        this._lipCallback = function () {
             if (!self._lipAudio || !self._lipAudio.isPlaying()) return;
-            var target = self._lipAudio.getVolume();
-            // lerp 平滑：避免嘴巴抽搐
-            self._currentLip += (target - self._currentLip) * 0.25;
-            self.setLipSync(self._currentLip);
-        });
+
+            // 🚨 偏差二修复：用 getSmoothedVolume（已含阈值过滤+黄金比例 lerp）
+            var target = self._lipAudio.getSmoothedVolume
+                ? self._lipAudio.getSmoothedVolume()
+                : self._lipAudio.getVolume();
+
+            // 人类肌肉反应级 lerp (0.4)
+            self._currentLip += (target - self._currentLip) * 0.4;
+
+            // 2.5x 放大系数 — 让嘴巴张开更明显
+            var mouthOpen = Math.min(1.0, self._currentLip * 2.5);
+
+            // 直接写入 Cubism 底层参数 ParamMouthOpenY
+            try {
+                self._model.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', mouthOpen);
+            } catch (e) {
+                // 降级：用 pixi-live2d-display 封装的 API
+                self.setLipSync(mouthOpen);
+            }
+        };
+
+        this._model.internalModel.on('beforeModelUpdate', this._lipCallback);
+        log('🔊 唇形同步已启动 (beforeModelUpdate 钩子)');
     };
 
     Live2DManager.prototype.disableLipSync = function () {
-        if (this._lipTicker) {
-            this._app.ticker.remove(this._lipTicker);
-            this._lipTicker = null;
+        if (this._lipCallback && this._model && this._model.internalModel) {
+            this._model.internalModel.off('beforeModelUpdate', this._lipCallback);
         }
+        this._lipCallback = null;
         this._lipAudio = null;
         this._currentLip = 0;
         this.setLipSync(0);  // 嘴巴闭合
+        log('🔇 唇形同步已停止');
     };
 
     Live2DManager.prototype.setStatus = function (status) {

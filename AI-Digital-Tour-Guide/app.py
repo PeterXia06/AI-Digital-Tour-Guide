@@ -1,18 +1,19 @@
 import os
+import asyncio
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, Response
-from urllib.parse import quote
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from datetime import date, datetime
 
-from config import APP_TITLE, APP_VERSION, ADMIN_SECRET_KEY
+import config
+from config import APP_TITLE, APP_VERSION, ADMIN_SECRET_KEY, CHARACTER_PROFILES, CURRENT_CHARACTER
 from database import get_db, init_db
 from models import Knowledge, Spot, Route, Conversation, Stat, AvatarConfig
 from services.knowledge_service import refresh_cache, load_cache, get_cache
 from services.chat_service import process_chat
-from services.tts_service import text_to_speech
+from services.tts_service import generate_aliyun_tts
 from services.stats_service import (
     get_dashboard_data, get_report_data,
     get_today_stats, get_week_service_trend,
@@ -25,7 +26,7 @@ app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
 # ── 注册 Admin 鉴权中间件 ──
 # 需要游客端公开访问的接口加入 ALLOWLIST
-_ADMIN_ALLOWLIST = {"/api/admin/verify", "/api/admin/avatar", "/api/admin/models"}
+_ADMIN_ALLOWLIST = {"/api/admin/verify", "/api/admin/avatar", "/api/admin/models", "/api/admin/character"}
 
 @app.middleware("http")
 async def admin_auth(request: Request, call_next):
@@ -41,6 +42,11 @@ async def admin_auth(request: Request, call_next):
 # ── 挂载静态文件 ──
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# 挂载 Live2D 模型资源（多角色资产目录）
+resources_dir = os.path.join(os.path.dirname(__file__), "resources")
+if os.path.isdir(resources_dir):
+    app.mount("/resources", StaticFiles(directory=resources_dir), name="resources")
 
 # ── 模板引擎 ──
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -90,25 +96,28 @@ async def chat(
 
     # 这里的 process_chat 已经是你写好的超级大模型版本了！
     result = await process_chat(db, session_id, message)
-    # 附加 TTS 音频 URL
+    # 调用百炼 CosyVoice 生成超拟人语音，URL 直链
     answer = result.get("answer", "")
     if answer:
-        result["audio_url"] = f"/api/tts?text={quote(answer)}"
+        loop = asyncio.get_running_loop()
+        audio_url = await loop.run_in_executor(None, generate_aliyun_tts, answer)
+        result["audio_url"] = audio_url
     return result
 
 @app.get("/api/tts")
 async def tts(text: str = Query(..., description="要合成语音的文本")):
     """
-    TTS 语音合成接口 (GET)
+    TTS 语音合成接口 (GET) — 百炼 CosyVoice 超拟人语音
     示例: /api/tts?text=你好欢迎来到灵山
-    Returns: audio/mpeg
+    生成 MP3 文件，302 重定向到静态 URL
     """
     text = text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="文本不能为空")
     try:
-        audio_bytes = await text_to_speech(text)
-        return Response(content=audio_bytes, media_type="audio/mpeg")
+        loop = asyncio.get_running_loop()
+        audio_url = await loop.run_in_executor(None, generate_aliyun_tts, text)
+        return RedirectResponse(url=audio_url)
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -323,6 +332,39 @@ async def admin_models():
         models.append({"name": name, "url": f"/static/{rel_path}"})
 
     return {"models": models}
+
+@app.get("/api/admin/character")
+async def get_active_character():
+    """
+    【多模态中枢】前端初始化时查询当前激活的角色 ID 与资产配置。
+    游客端公开访问（已加入 ALLOWLIST）。
+    """
+    char_id = config.CURRENT_CHARACTER
+    profile = config.CHARACTER_PROFILES.get(char_id)
+    if not profile:
+        # 降级：返回默认 hiyori
+        char_id = "hiyori"
+        profile = config.CHARACTER_PROFILES[char_id]
+    return {
+        "character_id": char_id,
+        "profile": profile,
+    }
+
+@app.post("/api/admin/character/switch")
+async def switch_character(request: Request, data: dict):
+    """
+    【多模态中枢】管理员下发角色切换指令（需 Admin Token）。
+    Body: { "character_id": "hiyori" | "ren" }
+    """
+    character_id = data.get("character_id", "")
+    if character_id not in config.CHARACTER_PROFILES:
+        raise HTTPException(status_code=400, detail=f"角色 '{character_id}' 不存在，可用: {list(config.CHARACTER_PROFILES.keys())}")
+
+    config.CURRENT_CHARACTER = character_id
+    new_name = config.CHARACTER_PROFILES[character_id]["name"]
+    print(f"[Admin] 🎭 数字人已切换为: {new_name} (ID: {character_id})")
+
+    return {"status": "success", "current": character_id, "name": new_name}
 
 @app.get("/api/admin/spots")
 async def admin_spots(db: Session = Depends(get_db)):
