@@ -1,0 +1,56 @@
+# ── Python 缓存 ──
+__pycache__/
+*.pyc
+*.pyo
+
+# ── 虚拟环境 ──
+venv/
+.venv/
+env/
+
+# ── 数据库 ──
+*.db
+*.sqlite3
+*.sqlite
+
+# ── 环境变量（含密钥）──
+.env
+AI-Digital-Tour-Guide/.env
+!.env.example
+AI-Digital-Tour-Guide/!.env.example
+
+# ── IDE & 工具 ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Claude ──
+.claude/
+
+# ── 向量数据库（ChromaDB）──
+AI-Digital-Tour-Guide/chroma_db_final/
+AI-Digital-Tour-Guide/chroma_db/
+
+# ── 旧版 lib 文件（已替换为 v7 本地版本）──
+AI-Digital-Tour-Guide/static/lib/pixi.browser.min.js
+AI-Digital-Tour-Guide/static/lib/pixi.es.min.js
+AI-Digital-Tour-Guide/static/lib/cubism-bridge.es.js
+AI-Digital-Tour-Guide/static/lib/cubism5.umd.js
+AI-Digital-Tour-Guide/static/lib/live2dcubismcore.min.js
+AI-Digital-Tour-Guide/static/lib/pixi-sound-stub.js
+AI-Digital-Tour-Guide/static/lib/pixi-sound.es.js
+
+# ── 模型资源 — 已提交
+
+# ── TTS 运行时生成的音频文件 ──
+AI-Digital-Tour-Guide/static/audio/
+
+# ── 项目文档（非代码）──
+*.docx
+软工文档/
+
+# ── macOS / Windows ──
+.DS_Store
+Thumbs.db

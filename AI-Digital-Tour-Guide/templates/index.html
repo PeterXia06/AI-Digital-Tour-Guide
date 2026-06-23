@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>灵山胜境 · AI 数字人导游</title>
+    <meta name="description" content="灵山胜境AI数字人导游，24小时在线智能导览">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <!-- Cubism 4 Core（Live2D 官方企业 CDN，稳定可靠） -->
+    <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+    <!-- PixiJS v7.4.2 -->
+    <script src="/static/lib/pixi.min.js"></script>
+    <!-- pixi-live2d-display v0.4.0 纯 Cubism 4 版 -->
+    <script src="/static/lib/cubism4.min.js"></script>
+    <style>
+        :root {
+            --gold:    #BF8D3A;
+            --gold-lt: #E8D5A3;
+            --gold-dk: #8B5E20;
+            --brown:   #4A3728;
+            --bg:      #F9F6F0;
+            --card:    #FFFFFF;
+            --border:  #E8E0D0;
+            --green:   #5E7A4A;
+            --red:    #B85C4A;
+            --text:    #3C3028;
+            --text-lt: #8C7C6C;
+            --shadow-sm: 0 1px 3px rgba(74,55,40,.06);
+            --shadow-md: 0 4px 16px rgba(74,55,40,.08);
+            --shadow-lg: 0 12px 40px rgba(74,55,40,.12);
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
+        }
+        h1, h2, h3, .serif { font-family: 'Noto Serif SC', serif; }
+        body::before {
+            content: '';
+            position: fixed; inset: 0; z-index: 0;
+            opacity: .022; pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+        }
+
+        #top-bar {
+            background: rgba(255,255,255,.82);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            position: sticky; top: 0; z-index: 50;
+        }
+
+        #admin-entry-btn {
+            border: 1px solid var(--border);
+            color: var(--text-lt);
+            transition: all .25s;
+        }
+        #admin-entry-btn:hover {
+            border-color: var(--gold);
+            color: var(--gold);
+            background: #fdf8ef;
+        }
+
+        #avatar-panel {
+            position: relative;
+            background: radial-gradient(ellipse at 50% 40%, rgba(191,141,58,.1) 0%, transparent 55%),
+                        linear-gradient(180deg, #fdf8ef 0%, #faf4e8 100%);
+        }
+        #avatar-panel canvas { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); }
+        #avatar-placeholder {
+            width: 180px; height: 180px;
+            background: radial-gradient(circle, rgba(191,141,58,.12), transparent 70%);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 72px;
+            animation: avatar-breathe 3.2s ease-in-out infinite;
+        }
+        @keyframes avatar-breathe {
+            0%,100% { transform: scale(1); opacity: .75; }
+            50%     { transform: scale(1.06); opacity: 1; }
+        }
+
+        #chat-messages { scroll-behavior: smooth; }
+        #chat-messages::-webkit-scrollbar { width: 4px; }
+        #chat-messages::-webkit-scrollbar-thumb { background: rgba(191,141,58,.25); border-radius: 2px; }
+        .msg-bot { background: #fff; border: 1px solid var(--border); border-radius: 14px 14px 14px 3px; }
+        .msg-user {
+            background: linear-gradient(135deg, rgba(191,141,58,.92), rgba(180,130,45,.92));
+            border-radius: 14px 14px 3px 14px; color: #fff;
+        }
+        .thinking-dot { animation: dot-pulse 1.4s ease-in-out infinite; }
+        .thinking-dot:nth-child(2) { animation-delay: .2s; }
+        .thinking-dot:nth-child(3) { animation-delay: .4s; }
+        @keyframes dot-pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+        .quick-btn {
+            border: 1px solid var(--border); color: var(--brown);
+            background: var(--card); transition: all .2s;
+        }
+        .quick-btn:hover {
+            border-color: var(--gold); background: #fdf8ef;
+            transform: translateY(-2px); box-shadow: 0 4px 14px rgba(191,141,58,.15);
+        }
+        .quick-btn:active { transform: translateY(0) scale(.97); }
+
+        .admin-tab {
+            color: var(--text-lt);
+            transition: all .2s;
+        }
+        .admin-tab:hover { color: var(--brown); background: #f8f4ec; }
+        .admin-tab.active { color: var(--gold); background: #fdf8ef; font-weight: 600; border-left: 3px solid var(--gold); }
+
+        .card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 14px; box-shadow: var(--shadow-sm);
+            transition: box-shadow .3s, transform .3s;
+        }
+        .card:hover { box-shadow: var(--shadow-md); }
+
+        #login-modal { background: rgba(74,55,40,.35); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+        #login-modal .modal-card { animation: modal-in .25s ease-out; }
+        @keyframes modal-in { from{opacity:0;transform:translateY(12px) scale(.97)} to{opacity:1;transform:translateY(0) scale(1)} }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-6px)} 40%,80%{transform:translateX(6px)} }
+        .shake { animation: shake .4s ease; }
+
+        .view-hidden { display: none !important; }
+
+        @media (max-width: 767px) {
+            #avatar-panel { height: 32vh; }
+        }
+    </style>
+</head>
+<body class="m-0 p-0">
+
+<header id="top-bar" class="flex items-center justify-between px-4 md:px-6 py-3">
+    <div class="flex items-center gap-2.5">
+        <span class="text-xl md:text-2xl">🏯</span>
+        <div>
+            <h1 class="text-base md:text-lg font-bold text-[var(--brown)] tracking-wide">灵山胜境</h1>
+            <p class="text-xs text-[var(--text-lt)] leading-none" id="top-bar-subtitle">AI 数字人导游</p>
+        </div>
+    </div>
+    <div id="top-bar-actions">
+        <button id="admin-entry-btn" onclick="openLoginModal()" class="px-4 py-1.5 rounded-full text-sm tracking-wide">管理员登录</button>
+        <button id="back-tourist-btn" onclick="switchToTourist()" class="px-4 py-1.5 rounded-full text-sm tracking-wide border border-[var(--border)] text-[var(--text-lt)] hover:border-[var(--gold)] hover:text-[var(--gold)] view-hidden">返回游客端</button>
+    </div>
+</header>
+
+<div id="tourist-view" class="flex flex-col md:flex-row" style="height:calc(100vh - 57px)">
+    <div id="avatar-panel" class="w-full md:w-[38%] h-[30vh] md:h-full relative border-b md:border-b-0 md:border-r border-[var(--border)]">
+        <div class="absolute top-3 left-3 z-10 flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-[var(--green)] animate-pulse"></span>
+            <span class="text-xs text-[var(--text-lt)] font-medium">小灵在线</span>
+        </div>
+        <div id="avatar-status" class="absolute top-3 right-3 z-10 text-xs text-[var(--text-lt)]">等待中</div>
+        <div id="l2d-container" class="absolute inset-0 flex items-center justify-center">
+            <canvas id="l2d-canvas" width="800" height="1000" style="max-width:100%;max-height:100%"></canvas>
+            <div id="avatar-placeholder">🧘</div>
+        </div>
+        <div class="absolute bottom-4 left-0 right-0 text-center">
+            <p class="text-sm font-semibold text-[var(--brown)] tracking-wider">AI 导游 · 小灵</p>
+            <p class="text-xs text-[var(--text-lt)] mt-0.5">24h 在线 · 有问必答</p>
+        </div>
+    </div>
+    <div class="w-full md:w-[62%] h-[70vh] md:h-full flex flex-col bg-[var(--bg)]">
+        <div class="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--border)] bg-white">
+            <span class="text-lg">💬</span>
+            <span class="text-sm font-semibold text-[var(--brown)]">智能导览</span>
+        </div>
+        <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            <div class="flex gap-2">
+                <div class="w-7 h-7 rounded-full bg-[var(--gold-lt)]/30 flex items-center justify-center text-sm shrink-0">🧘</div>
+                <div class="msg-bot px-3 py-2 max-w-[85%] text-sm" id="welcome-msg">
+                    <p class="leading-relaxed text-[var(--text)]"></p>
+                </div>
+            </div>
+        </div>
+        <div class="px-4 py-2 flex gap-2 overflow-x-auto">
+            <button onclick="quickAsk('喜欢历史')" class="quick-btn shrink-0 px-3 py-1.5 rounded-full text-xs">🏛 喜欢历史</button>
+            <button onclick="quickAsk('喜欢自然')" class="quick-btn shrink-0 px-3 py-1.5 rounded-full text-xs">🌿 喜欢自然</button>
+            <button onclick="quickAsk('亲子出游')" class="quick-btn shrink-0 px-3 py-1.5 rounded-full text-xs">👨‍👩‍👧 亲子出游</button>
+            <button onclick="quickAsk('推荐美食')" class="quick-btn shrink-0 px-3 py-1.5 rounded-full text-xs">🍜 推荐美食</button>
+        </div>
+        <div class="px-4 py-3 border-t border-[var(--border)] bg-white">
+            <div class="flex items-center gap-2">
+                <button id="voice-btn" onclick="toggleVoice()" class="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center shrink-0 transition-all">
+                    <svg id="mic-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H9m3 0h3m-3-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                </button>
+                <input id="message-input" type="text" placeholder="问我关于灵山的问题..." class="flex-1 bg-gray-50 text-[var(--text)] placeholder-gray-400 px-4 py-2.5 rounded-xl border border-[var(--border)] focus:border-[var(--gold)] focus:outline-none text-sm" onkeydown="if(event.key==='Enter')sendMessage()">
+                <button onclick="sendMessage()" class="w-9 h-9 rounded-full bg-[var(--gold)] hover:opacity-90 text-white flex items-center justify-center shrink-0 transition-all" title="发送">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                </button>
+            </div>
+            <p id="voice-status" class="text-[var(--text-lt)] text-xs mt-1.5 text-center hidden"></p>
+        </div>
+    </div>
+</div>
+
+<div id="admin-view" class="view-hidden flex flex-row" style="height:calc(100vh - 57px)">
+    <aside class="w-48 shrink-0 flex flex-col border-r border-[var(--border)] bg-white">
+        <div class="p-4 border-b border-[var(--border)]">
+            <p class="text-sm font-bold text-[var(--brown)]">灵山管理后台</p>
+            <p class="text-xs text-[var(--text-lt)] mt-0.5">运营管理平台</p>
+        </div>
+        <nav class="flex-1 p-2 space-y-1">
+            <span class="block w-full text-left px-3 py-2.5 rounded text-sm cursor-pointer transition-colors admin-tab active" data-tab="dashboard" onclick="switchAdminTab('dashboard')">数据大屏</span>
+            <span class="block w-full text-left px-3 py-2.5 rounded text-sm cursor-pointer transition-colors admin-tab" data-tab="knowledge" onclick="switchAdminTab('knowledge')">知识库管理</span>
+            <span class="block w-full text-left px-3 py-2.5 rounded text-sm cursor-pointer transition-colors admin-tab" data-tab="avatar" onclick="switchAdminTab('avatar')">数字人形象</span>
+            <span class="block w-full text-left px-3 py-2.5 rounded text-sm cursor-pointer transition-colors admin-tab" data-tab="report" onclick="switchAdminTab('report')">游客感受度</span>
+        </nav>
+        <div class="p-3 border-t border-[var(--border)]">
+            <span class="block w-full text-left px-3 py-2 text-xs text-[var(--text-lt)] hover:text-[var(--red)] cursor-pointer transition-colors" onclick="switchToTourist()">退出后台</span>
+        </div>
+    </aside>
+    <main class="flex-1 overflow-y-auto p-4 md:p-6">
+        <section id="tab-dashboard" class="admin-section">
+            <h2 class="text-lg font-bold text-[var(--brown)] mb-4">数据大屏</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                <div class="card p-4"><p class="text-xs text-[var(--text-lt)]">今日服务人次</p><p class="text-2xl font-bold text-[var(--gold)] mt-1" id="today-count">-</p></div>
+                <div class="card p-4"><p class="text-xs text-[var(--text-lt)]">本周服务人次</p><p class="text-2xl font-bold text-[var(--gold)] mt-1" id="week-count">-</p></div>
+                <div class="card p-4"><p class="text-xs text-[var(--text-lt)]">正面情感率</p><p class="text-2xl font-bold text-[var(--green)] mt-1" id="positive-rate">-</p></div>
+                <div class="card p-4"><p class="text-xs text-[var(--text-lt)]">知识库条目</p><p class="text-2xl font-bold text-[var(--brown)] mt-1" id="knowledge-count">-</p></div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-2">本周服务趋势</h3><div id="chart-week" style="height:260px;"></div></div>
+                <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-2">情感趋势</h3><div id="chart-emotion" style="height:260px;"></div></div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-2">热门问题 TOP5</h3><div id="hot-list" class="space-y-2"></div></div>
+                <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-2">标签问答分布</h3><div id="chart-tag" style="height:240px;"></div></div>
+            </div>
+        </section>
+        <section id="tab-knowledge" class="admin-section view-hidden">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                <h2 class="text-lg font-bold text-[var(--brown)]">知识库管理</h2>
+                <div class="flex gap-2">
+                    <button onclick="showKnowledgeForm()" class="px-4 py-2 bg-[var(--gold)] text-white rounded-lg text-sm hover:opacity-90">新增条目</button>
+                    <button onclick="document.getElementById('import-file').click()" class="px-4 py-2 bg-[var(--brown)] text-white rounded-lg text-sm hover:opacity-90">批量导入</button>
+                    <input type="file" id="import-file" accept=".json" class="hidden" onchange="importKnowledge(event)">
+                </div>
+            </div>
+            <div class="flex gap-2 mb-4 flex-wrap">
+                <input id="k-search" type="text" placeholder="搜索问题/答案..." class="px-3 py-2 border border-[var(--border)] rounded-lg text-sm w-48 bg-white" oninput="loadKnowledge()">
+                <select id="k-tag" class="px-3 py-2 border border-[var(--border)] rounded-lg text-sm bg-white" onchange="loadKnowledge()"><option value="">全部标签</option><option>历史</option><option>文化</option><option>自然</option><option>建筑</option><option>禅意</option><option>亲子</option><option>美食</option><option>实用信息</option></select>
+                <select id="k-route" class="px-3 py-2 border border-[var(--border)] rounded-lg text-sm bg-white" onchange="loadKnowledge()"><option value="">全部路线</option><option>历史文化深度路线</option><option>自然风光爱好者路线</option><option>亲子家庭路线</option></select>
+            </div>
+            <div class="card overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-[var(--bg)] text-[var(--text-lt)]"><tr><th class="p-3 text-left">ID</th><th class="p-3 text-left">问题</th><th class="p-3 text-left">标签</th><th class="p-3 text-left">路线</th><th class="p-3 text-left">操作</th></tr></thead>
+                    <tbody id="knowledge-tbody"></tbody>
+                </table>
+            </div>
+            <div class="flex items-center justify-between mt-3" id="knowledge-pagination"></div>
+        </section>
+        <section id="tab-avatar" class="admin-section view-hidden">
+            <h2 class="text-lg font-bold text-[var(--brown)] mb-4">数字人形象管理</h2>
+            <!-- 🎭 角色切换卡片（事件委托，无内联 onclick） -->
+            <div class="card p-5 mb-5">
+                <h3 class="font-semibold text-[var(--brown)] mb-3">🎭 角色切换（秒级热切换）</h3>
+                <p class="text-xs text-[var(--text-lt)] mb-3">切换将同时改变 Live2D 模型与 TTS 语音音色</p>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <button class="char-switch-btn px-5 py-2.5 rounded-xl text-sm font-medium transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                            data-character="hiyori"
+                            style="background:linear-gradient(135deg,#BF8D3A,#D4A94E);color:#fff;">
+                        👩 小灵 · 元气女声
+                    </button>
+                    <button class="char-switch-btn px-5 py-2.5 rounded-xl text-sm font-medium transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                            data-character="chitose"
+                            style="background:linear-gradient(135deg,#6B5B8A,#8B7DB8);color:#fff;">
+                        🧑 千岁 · 清朗男声
+                    </button>
+                    <span id="char-status" class="text-xs text-[var(--text-lt)] ml-2"></span>
+                </div>
+            </div>
+            <div class="card p-5">
+                <h3 class="font-semibold text-[var(--brown)] mb-4">欢迎语 & 语音测试</h3>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <input id="av-greeting" type="text" class="flex-1 min-w-[260px] border border-[var(--border)] rounded-lg px-3 py-2 text-sm bg-white" placeholder="欢迎来到灵山胜境！我是您的AI导游...">
+                    <button onclick="saveAvatar()" class="px-4 py-2 bg-[var(--gold)] text-white rounded-lg text-sm hover:opacity-90 shrink-0">保存</button>
+                    <button onclick="testAvatarTTS()" class="px-4 py-2 bg-[var(--green)] text-white rounded-lg text-sm hover:opacity-90 shrink-0">🎙 测试语音</button>
+                </div>
+                <p id="tts-test-status" class="text-xs text-[var(--text-lt)] mt-2 hidden"></p>
+            </div>
+        </section>
+        <section id="tab-report" class="admin-section view-hidden">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                <h2 class="text-lg font-bold text-[var(--brown)]">游客感受度报告</h2>
+                <div class="flex gap-2 items-center">
+                    <input id="r-start" type="date" class="border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm bg-white" onchange="loadReport()">
+                    <span class="text-[var(--text-lt)] text-xs">至</span>
+                    <input id="r-end" type="date" class="border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm bg-white" onchange="loadReport()">
+                </div>
+            </div>
+            <div class="grid grid-cols-3 gap-3 mb-5">
+                <div class="card p-4 text-center"><p class="text-xs text-[var(--text-lt)]">正面</p><p class="text-xl font-bold text-[var(--green)]" id="r-positive">0</p></div>
+                <div class="card p-4 text-center"><p class="text-xs text-[var(--text-lt)]">中性</p><p class="text-xl font-bold text-[var(--text-lt)]" id="r-neutral">0</p></div>
+                <div class="card p-4 text-center"><p class="text-xs text-[var(--text-lt)]">负面</p><p class="text-xl font-bold text-[var(--red)]" id="r-negative">0</p></div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-2">情感分布</h3><div id="chart-sentiment" style="height:240px;"></div></div>
+                <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-2">情感趋势</h3><div id="chart-sentiment-trend" style="height:240px;"></div></div>
+            </div>
+            <div class="card p-4"><h3 class="text-sm font-semibold text-[var(--brown)] mb-3">最近对话记录</h3><div id="recent-convs" class="space-y-2 max-h-80 overflow-y-auto"></div></div>
+        </section>
+    </main>
+</div>
+
+<div id="login-modal" class="fixed inset-0 view-hidden flex items-center justify-center z-[100]">
+    <div class="modal-card bg-white rounded-2xl p-6 w-full max-w-sm mx-4 text-center shadow-2xl">
+        <div class="w-12 h-12 mx-auto mb-3 rounded-full bg-[var(--bg)] flex items-center justify-center">
+            <svg class="w-5 h-5 text-[var(--gold)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        </div>
+        <h3 class="text-lg font-bold text-[var(--brown)] mb-1">管理员验证</h3>
+        <p class="text-xs text-[var(--text-lt)] mb-4">灵山胜境 · 运营管理平台</p>
+        <input id="auth-token" type="password" placeholder="请输入管理 Token" class="w-full border border-[var(--border)] rounded-xl px-4 py-2.5 text-sm text-center mb-3 focus:border-[var(--gold)] focus:outline-none" onkeydown="if(event.key==='Enter')verifyToken()">
+        <button onclick="verifyToken()" class="w-full py-2.5 bg-[var(--gold)] text-white rounded-xl text-sm hover:opacity-90 font-medium">进入后台</button>
+        <p id="auth-error" class="text-[var(--red)] text-xs mt-2 hidden">Token 错误，请重试</p>
+        <button onclick="closeLoginModal()" class="text-xs text-[var(--text-lt)] hover:text-[var(--brown)] mt-3">取消</button>
+    </div>
+</div>
+
+<div id="knowledge-modal" class="fixed inset-0 bg-black/40 view-hidden flex items-center justify-center z-50">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto shadow-2xl">
+        <h3 id="modal-title" class="text-lg font-bold text-[var(--brown)] mb-4">新增知识条目</h3>
+        <form id="knowledge-form" class="space-y-3">
+            <input type="hidden" id="k-id">
+            <div><label class="text-xs text-[var(--text-lt)]">关联景点 ID</label><input id="k-spot_id" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1"></div>
+            <div><label class="text-xs text-[var(--text-lt)]">问题 *</label><input id="k-question" required class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1"></div>
+            <div><label class="text-xs text-[var(--text-lt)]">答案 *</label><textarea id="k-answer" rows="5" required class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1"></textarea></div>
+            <div class="grid grid-cols-2 gap-2">
+                <div><label class="text-xs text-[var(--text-lt)]">标签</label><select id="k-tag-form" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1"><option value="">请选择</option><option>历史</option><option>文化</option><option>自然</option><option>建筑</option><option>禅意</option><option>亲子</option><option>美食</option><option>实用信息</option></select></div>
+                <div><label class="text-xs text-[var(--text-lt)]">路线</label><select id="k-route-form" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1"><option value="">请选择</option><option>历史文化深度路线</option><option>自然风光爱好者路线</option><option>亲子家庭路线</option></select></div>
+            </div>
+            <div><label class="text-xs text-[var(--text-lt)]">来源</label><input id="k-source" class="w-full border border-[var(--border)] rounded-lg px-3 py-2 text-sm mt-1"></div>
+            <div class="flex gap-3 pt-3">
+                <button type="submit" class="flex-1 py-2 bg-[var(--gold)] text-white rounded-lg text-sm hover:opacity-90">保存</button>
+                <button type="button" onclick="closeKnowledgeForm()" class="flex-1 py-2 bg-gray-100 text-[var(--text)] rounded-lg text-sm hover:bg-gray-200">取消</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+var _adminToken = sessionStorage.getItem('admin_token') || '';
+function switchToAdmin() {
+    document.getElementById('tourist-view').classList.add('view-hidden');
+    document.getElementById('admin-view').classList.remove('view-hidden');
+    document.getElementById('admin-entry-btn').classList.add('view-hidden');
+    document.getElementById('back-tourist-btn').classList.remove('view-hidden');
+    document.getElementById('top-bar-subtitle').textContent = '运营管理平台';
+    closeLoginModal();
+    switchAdminTab('dashboard');
+}
+function switchToTourist() {
+    document.getElementById('admin-view').classList.add('view-hidden');
+    document.getElementById('tourist-view').classList.remove('view-hidden');
+    document.getElementById('back-tourist-btn').classList.add('view-hidden');
+    document.getElementById('admin-entry-btn').classList.remove('view-hidden');
+    document.getElementById('top-bar-subtitle').textContent = 'AI 数字人导游';
+}
+function openLoginModal() {
+    document.getElementById('login-modal').classList.remove('view-hidden');
+    document.getElementById('auth-token').value='';
+    document.getElementById('auth-error').classList.add('hidden');
+    setTimeout(function(){document.getElementById('auth-token').focus()},100);
+}
+function closeLoginModal(){document.getElementById('login-modal').classList.add('view-hidden')}
+async function verifyToken(){
+    var t=document.getElementById('auth-token').value.trim();
+    if(!t)return;
+    try{
+        var r=await fetch('/api/admin/verify',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':t}});
+        if(r.ok){_adminToken=t;sessionStorage.setItem('admin_token',t);switchToAdmin()}
+        else{document.getElementById('auth-error').classList.remove('hidden');document.getElementById('auth-token').classList.add('shake');setTimeout(function(){document.getElementById('auth-token').classList.remove('shake')},400)}
+    }catch(e){document.getElementById('auth-error').classList.remove('hidden')}
+}
+function switchAdminTab(tabName){
+    document.querySelectorAll('.admin-tab').forEach(function(el){el.classList.remove('active')});
+    var tabEl=document.querySelector('[data-tab="'+tabName+'"]');
+    if(tabEl)tabEl.classList.add('active');
+    document.querySelectorAll('.admin-section').forEach(function(el){el.classList.add('view-hidden')});
+    var section=document.getElementById('tab-'+tabName);
+    if(section)section.classList.remove('view-hidden');
+    if(tabName==='dashboard'&&typeof loadDashboard==='function')loadDashboard();
+    if(tabName==='knowledge'&&typeof loadKnowledge==='function')loadKnowledge();
+    if(tabName==='avatar'&&typeof loadAvatarConfig==='function')loadAvatarConfig();
+    if(tabName==='report'&&typeof loadReport==='function')loadReport();
+}
+function logout(){_adminToken='';sessionStorage.removeItem('admin_token');switchToTourist()}
+document.getElementById('login-modal').addEventListener('click',function(e){if(e.target===this)closeLoginModal()});
+</script>
+
+<!-- Live2DManager 类定义（UMD 全局模式，依赖 window.PIXI + PIXI.live2d） -->
+<script src="/static/js/live2d-manager.js?v=4"></script>
+<!-- AudioManager：Web Audio API 播放 + 实时音量分析 -->
+<script src="/static/js/audio-manager.js"></script>
+<!-- 🎭 多模态中枢：Live2D 数字人初始化（先问 API 再加载角色） -->
+<script>
+var l2dManager = new Live2DManager({
+    canvasId: 'l2d-canvas',
+    placeholderId: 'avatar-placeholder',
+    width: 800,
+    height: 1000,
+});
+l2dManager.init().then(function(ok){
+    if (!ok) return;
+    // 🎭 异步查询中枢系统，按当前角色加载对应模型 + 音色
+    l2dManager.fetchAndLoadCharacter();
+}).catch(function(e){
+    console.error('[Live2D] 初始化失败:', e);
+    var p = document.getElementById('avatar-placeholder');
+    if (p) p.style.display = 'flex';
+});
+
+
+document.addEventListener('DOMContentLoaded',function(){
+    if(_adminToken){
+        fetch('/api/admin/verify',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':_adminToken}})
+            .then(function(r){if(r.ok)switchToAdmin()});
+    }
+});
+</script>
+<script src="/static/js/chat.js"></script>
+<script src="/static/js/admin.js"></script>
+</body>
+</html>
