@@ -1,10 +1,9 @@
 """
-Admin 鉴权中间件
-校验请求 Header 中的 X-Admin-Token
+Admin 模块
+
+注意：Admin 鉴权逻辑已内联到 app.py 中：
+- Token 验证：app.py 的 /api/admin/verify 端点
+- 请求拦截：app.py 的 admin_auth 中间件
+
+本模块保留供未来扩展使用。
 """
-
-
-def verify_admin_token(token: str) -> bool:
-    """验证管理后台 Token"""
-    from config import ADMIN_SECRET_KEY
-    return token == ADMIN_SECRET_KEY

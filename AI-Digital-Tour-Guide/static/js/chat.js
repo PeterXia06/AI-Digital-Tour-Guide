@@ -21,15 +21,16 @@ if (!sessionId) {
 let isProcessing = false;
 let isListening = false;
 let recognition = null;
-let synth = window.speechSynthesis;
-let selectedVoice = null;
+// AudioManager：Web Audio API 播放 + 实时音量分析（替代浏览器 SpeechSynthesis）
+let audioManager = null;
 
 // ═══════════════════════════════════════════════
 // 初始化
 // ═══════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
     initSpeechRecognition();
-    initSpeechSynthesis();
+    audioManager = new AudioManager();
+    initAudioManagerCallbacks();
     loadGreeting();
     updateStatus('idle');
 });
@@ -40,7 +41,9 @@ function loadGreeting() {
         .then(config => {
             const greeting = config.greeting || '欢迎来到灵山胜境！我是您的AI导游小灵，有什么可以帮您的吗？';
             document.getElementById('welcome-msg').querySelector('p').textContent = greeting;
-            speak(greeting);
+            // 用 AudioManager 播放 TTS 欢迎语
+            var greetingUrl = `${CHAT_API}/tts?text=${encodeURIComponent(greeting)}`;
+            audioManager.play(greetingUrl);
         })
         .catch(() => {
             document.getElementById('welcome-msg').querySelector('p').textContent =
@@ -150,47 +153,24 @@ function updateVoiceButton(active) {
 }
 
 // ═══════════════════════════════════════════════
-// 语音合成（SpeechSynthesis API）
+// AudioManager 回调绑定（替代旧的 SpeechSynthesis）
 // ═══════════════════════════════════════════════
-function initSpeechSynthesis() {
-    // 等 voices 加载完成
-    if (synth.getVoices().length > 0) {
-        selectVoice();
-    } else {
-        synth.onvoiceschanged = selectVoice;
-    }
-}
-
-function selectVoice() {
-    const voices = synth.getVoices();
-    // 优先选择中文女声
-    selectedVoice = voices.find(v => v.lang.startsWith('zh-CN') && v.name.includes('Female')) ||
-                    voices.find(v => v.lang.startsWith('zh-CN')) ||
-                    voices.find(v => v.lang.startsWith('zh')) ||
-                    voices[0];
-}
-
-function speak(text) {
-    if (!synth || !text) return;
-
-    // 停止当前播放
-    synth.cancel();
-
-    // 清理文本中的 markdown 符号
-    const cleanText = text.replace(/[*#`\-_~\[\]()]/g, '').replace(/\n+/g, '。');
-
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.voice = selectedVoice;
-    utterance.rate = 0.95;
-    utterance.pitch = 1.05;
-    utterance.volume = 1;
-
-    // 说话状态更新 Live2D
-    utterance.onstart = () => updateStatus('speaking');
-    utterance.onend = () => updateStatus('idle');
-    utterance.onerror = () => updateStatus('idle');
-
-    synth.speak(utterance);
+function initAudioManagerCallbacks() {
+    if (!audioManager) return;
+    audioManager.onStart(function () {
+        updateStatus('speaking');
+        // 启动 Live2D 唇形同步
+        if (window.l2dManager && window.l2dManager.isReady()) {
+            window.l2dManager.enableLipSync(audioManager);
+        }
+    });
+    audioManager.onEnd(function () {
+        updateStatus('idle');
+        // 停止 Live2D 唇形同步
+        if (window.l2dManager && window.l2dManager.isReady()) {
+            window.l2dManager.disableLipSync();
+        }
+    });
 }
 
 // ═══════════════════════════════════════════════
@@ -228,9 +208,9 @@ async function sendMessage() {
         // 添加机器人消息
         addMessage('bot', data.answer, data.source, data.spot_id);
 
-        // 语音播报
-        if (data.answer) {
-            speak(data.answer);
+        // 语音播报（后端 CosyVoice TTS）
+        if (data.audio_url && audioManager) {
+            audioManager.play(data.audio_url);
         }
 
         // 正面消息触发笑脸
@@ -266,27 +246,41 @@ function quickAsk(tag) {
 // ═══════════════════════════════════════════════
 // UI 辅助
 // ═══════════════════════════════════════════════
-function addMessage(role, text, source, spotId) {
-    const container = document.getElementById('chat-messages');
+function typewriter(element, fullText, durationMs) {
+    var chars = fullText.length;
+    if (chars === 0) return;
+    // 估算：音频时长 / 字符数，但至少 30ms/字（保证可读性）
+    var interval = Math.max(30, durationMs / chars);
+    var i = 0;
+    var timer = setInterval(function () {
+        i++;
+        element.textContent = fullText.substring(0, i);
+        var container = document.getElementById('chat-messages');
+        container.scrollTop = container.scrollHeight;
+        if (i >= chars) clearInterval(timer);
+    }, interval);
+}
 
-    const div = document.createElement('div');
-    div.className = `flex gap-2 ${role === 'user' ? 'justify-end' : ''}`;
+function addMessage(role, text, source, spotId) {
+    var container = document.getElementById('chat-messages');
+    var div = document.createElement('div');
+    div.className = 'flex gap-2 ' + (role === 'user' ? 'justify-end' : '');
 
     if (role === 'bot') {
-        div.innerHTML = `
-            <div class="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center text-sm shrink-0">🧘</div>
-            <div class="msg-bot px-3 py-2 max-w-[85%] text-sm text-gray-800 shadow-sm">
-                <p class="leading-relaxed whitespace-pre-wrap">${escapeHtml(text)}</p>
-                ${source ? `<span class="text-xs text-gray-400 mt-1 block">来源：${source === 'knowledge_base' ? '📚 知识库' : '🤖 AI助手'}</span>` : ''}
-            </div>
-        `;
+        div.innerHTML = '<div class="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center text-sm shrink-0">🧘</div>' +
+            '<div class="msg-bot px-3 py-2 max-w-[85%] text-sm text-gray-800 shadow-sm">' +
+            '<p class="leading-relaxed whitespace-pre-wrap"></p>' +
+            (source ? '<span class="text-xs text-gray-400 mt-1 block">来源：' + (source === 'knowledge_base' ? '📚 知识库' : '🤖 AI助手') + '</span>' : '') +
+            '</div>';
+        var p = div.querySelector('p');
+        // 打字机效果：根据音频时长同步
+        var duration = (audioManager && audioManager.getDuration() > 0) ? audioManager.getDuration() * 1000 : text.length * 80;
+        typewriter(p, text, duration);
     } else {
-        div.innerHTML = `
-            <div class="msg-user px-3 py-2 max-w-[80%] text-sm shadow-sm">
-                <p class="leading-relaxed">${escapeHtml(text)}</p>
-            </div>
-            <div class="w-8 h-8 rounded-full bg-amber-500 flex items-center justify-center text-white text-sm shrink-0">👤</div>
-        `;
+        div.innerHTML = '<div class="msg-user px-3 py-2 max-w-[80%] text-sm shadow-sm">' +
+            '<p class="leading-relaxed">' + escapeHtml(text) + '</p>' +
+            '</div>' +
+            '<div class="w-8 h-8 rounded-full bg-amber-500 flex items-center justify-center text-white text-sm shrink-0">👤</div>';
     }
 
     container.appendChild(div);
@@ -331,6 +325,11 @@ function updateStatus(status) {
 
     const info = statusMap[status] || statusMap['idle'];
     statusEl.textContent = info.text;
+
+    // Live2D 数字人状态同步
+    if (window.l2dManager && window.l2dManager.isReady()) {
+        window.l2dManager.setStatus(status);
+    }
 
     // 非 Live2D 模式下更新占位符表情
     if (placeholder && placeholder.style.display !== 'none') {

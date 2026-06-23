@@ -1,93 +1,142 @@
 """
-路线推荐服务
-根据标签匹配对应的游览路线及景点序列。
+推荐服务
+- 基于 ChromaDB 向量检索 + LLM 结构化路线规划
+- 双数据库融合 (Vector DB + SQL DB)
 """
+import json
+import re
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from models import Route, Spot
+from dotenv import load_dotenv, find_dotenv
+
+from langchain_community.chat_models import ChatTongyi
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from models import Spot
+# 【修复点】使用 knowledge_service 导出的共享 retriever 单例
+from services.knowledge_service import retriever
+
+# 加载环境变量
+load_dotenv(find_dotenv())
+
+print("🗺️  [RecommendService] 正在启动大模型结构化路线规划引擎...")
+
+# ── 初始化 LLM ──
+# temperature=0.1 极低温，让大模型极其理智，防止输出畸形的 JSON
+llm = ChatTongyi(model="qwen-turbo", temperature=0.1)
+
+# ── 路线推荐模板 ──
+# 【修复点】补充了缺失的变量名 RECOMMEND_TEMPLATE
+RECOMMEND_TEMPLATE = """你是「灵山胜境」景区的AI行程规划师。
+
+你的特点：
+- 热情亲切，说话带一点禅意但不刻意
+- 回答风格口语化，像真人导游聊天
+- 尊称游客为"您"
+
+【必须严格遵守的输出格式】
+你必须且只能输出一个合法的 JSON 数据（不要用 ```json 包裹，直接输出大括号），格式严格如下：
+{{
+    "name": "为路线起个好听的名字(如: 灵山禅意静心游)",
+    "type": "{tag}",
+    "duration": "如: 3小时 / 半日游",
+    "description": "路线的总体特色介绍(50字左右)",
+    "spots": [
+        {{
+            "name": "景点名称(必须是参考资料里真实存在的)",
+            "intro": "景点简介(一句话)",
+            "highlight": "核心看点"
+        }}
+    ]
+}}
+
+【参考资料】
+{context}
+"""
+prompt = ChatPromptTemplate.from_template(RECOMMEND_TEMPLATE)
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+# 组装流水线
+recommend_chain = prompt | llm | StrOutputParser()
 
 
+# ==========================================
+# 核心业务逻辑：双数据库融合 (Vector DB + SQL DB)
+# ==========================================
 def get_recommendations(db: Session, tag: str) -> dict:
     """
-    按标签获取路线推荐。
-
-    参数：
-        tag: 标签名（历史/自然/亲子/美食/禅意/建筑）
-
-    返回：
-        {
-            "tag": str,
-            "routes": [
-                {
-                    "name": str,
-                    "type": str,
-                    "duration": str,
-                    "description": str,
-                    "spots": [
-                        {"spot_id": str, "name": str, "intro": str, "highlight": str}
-                    ]
-                }
-            ]
-        }
+    通过大模型生成路线，并与 SQLite/MySQL 中的真实 Spot ID 进行绑定。
     """
-    # 查找匹配的路线
-    routes = db.query(Route).filter(Route.type == tag).all()
+    print(f"\n🎯 [RecommendService] 收到智能路线请求，主题：{tag}")
 
-    # 如果按 type 没找到，尝试按 name 模糊匹配（如 tag="自然" 匹配 route_name 含 "自然"）
-    if not routes:
-        routes = db.query(Route).filter(Route.name.contains(tag)).all()
+    try:
+        # 第一步：去 Chroma 向量库捞出知识点
+        docs = retriever.invoke(f"适合{tag}主题的景点和游览路线")
+        context = format_docs(docs)
 
-    result_routes = []
-    for route in routes:
-        route_dict = route.to_dict()
-        spots_data = []
+        # 第二步：逼迫大模型吐出标准 JSON 格式的路线
+        raw_response = recommend_chain.invoke({"tag": tag, "context": context})
 
-        # 按 stop_order 顺序获取景点信息
-        stop_order = route_dict.get("stop_order", [])
-        highlights = route_dict.get("highlights", {}) or {}
+        # 容错处理：清除大模型有时手贱加上的 markdown 代码块标记
+        cleaned_json = re.sub(r"^```json\s*", "", raw_response, flags=re.IGNORECASE)
+        cleaned_json = re.sub(r"\s*```$", "", cleaned_json)
 
-        for i, spot_id in enumerate(stop_order):
-            spot = db.query(Spot).filter(Spot.spot_id == spot_id).first()
-            if spot:
-                spots_data.append({
-                    "spot_id": spot.spot_id,
-                    "name": spot.name,
-                    "intro": (spot.detail or spot.culture or "")[:150] + "...",
-                    "highlight": highlights.get(spot_id, highlights.get(str(i), "")),
-                    "tag": spot.tag,
-                })
+        # 解析为 Python 字典
+        llm_route = json.loads(cleaned_json)
 
-        result_routes.append({
-            "name": route_dict["name"],
-            "type": route_dict["type"],
-            "duration": route_dict["duration"],
-            "description": route_dict["description"],
-            "spots": spots_data,
-        })
+        # 【修复点】防御：确保 llm_route 是 dict
+        if not isinstance(llm_route, dict):
+            raise ValueError(f"LLM 返回了非预期的类型: {type(llm_route)}")
 
-    # 如果没有匹配路线，按 tag 找相关景点作为fallback
-    if not result_routes:
-        spots = db.query(Spot).filter(Spot.tag == tag).limit(10).all()
-        if spots:
-            result_routes.append({
-                "name": f"{tag}主题精选",
+        # 第三步：魔法时刻 🌟 —— 实体对齐
+        # 大模型生成的只是文字，我们需要给它挂上真实的数据库 spot_id
+        aligned_spots = []
+        for spot in llm_route.get("spots", []):
+            spot_name = spot.get("name", "")
+
+            # 去关系型数据库里模糊查询，找真实的景点记录
+            db_spot = db.query(Spot).filter(Spot.name.contains(spot_name)).first()
+
+            aligned_spots.append({
+                "spot_id": db_spot.spot_id if db_spot else f"ai_gen_{len(aligned_spots)}",
+                "name": spot_name,
+                "intro": spot.get("intro", ""),
+                "highlight": spot.get("highlight", ""),
+                "tag": db_spot.tag if db_spot else tag,
+            })
+
+        llm_route["spots"] = aligned_spots
+
+        print("✅ 大模型结构化路线生成并对齐完毕！")
+
+        return {
+            "tag": tag,
+            "routes": [llm_route],  # 完美贴合前端的 Array 结构
+        }
+
+    except Exception as e:
+        print(f"❌ 推荐引擎解析失败，触发安全兜底逻辑: {e}")
+        # 如果大模型抽风 JSON 解析失败，执行队友以前的兜底方案
+        fallback_spots = db.query(Spot).filter(Spot.tag == tag).limit(3).all()
+        return {
+            "tag": tag,
+            "routes": [{
+                "name": f"{tag}经典探索",
                 "type": tag,
-                "duration": "自由安排",
-                "description": f"为您精选了{tag}相关的景点",
+                "duration": "随心游",
+                "description": f"为您匹配了基础的{tag}精选景点",
                 "spots": [
                     {
                         "spot_id": s.spot_id,
                         "name": s.name,
-                        "intro": (s.detail or s.culture or "")[:150] + "...",
-                        "highlight": "",
+                        "intro": (s.detail or "")[:50],
+                        "highlight": "精选推荐",
                         "tag": s.tag,
-                    }
-                    for s in spots
+                    } for s in fallback_spots
                 ],
-            })
-
-    return {
-        "tag": tag,
-        "routes": result_routes,
-    }
+            }] if fallback_spots else [],
+        }

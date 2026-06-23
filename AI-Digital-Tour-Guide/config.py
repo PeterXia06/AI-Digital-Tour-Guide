@@ -35,6 +35,13 @@ ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "lingshan-admin-2026")
 AZURE_TTS_KEY = os.getenv("AZURE_TTS_KEY", "")
 AZURE_TTS_REGION = os.getenv("AZURE_TTS_REGION", "eastasia")
 
+# ── TTS 语音合成 ──
+# TTS_PROVIDER: "edge" (免费微软 Edge TTS) 或 "dashscope" (百炼 CosyVoice)
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge")
+TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")  # 微软中文女声
+TTS_MODEL = os.getenv("TTS_MODEL", "cosyvoice-v1")  # 仅 dashscope 模式使用
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+
 # ── 应用设置 ──
 APP_TITLE = "灵山胜境 AI 数字人导游"
 APP_VERSION = "1.0.0"
