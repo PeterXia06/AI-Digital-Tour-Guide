@@ -1,138 +1,85 @@
-"""
-知识库检索服务
-- jieba 分词 + 关键词匹配
-- 内存缓存（首次加载后常驻，CUD 操作后刷新）
-"""
-import jieba
-import re
+import os
+from dotenv import load_dotenv, find_dotenv
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
-
-from models import Knowledge
-
-# ── 停用词表（常见无意义词汇） ──
-STOP_WORDS = set([
-    "的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一",
-    "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
-    "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那", "些",
-    "什么", "怎么", "如何", "为什么", "吗", "呢", "吧", "啊", "哦", "嗯",
-    "请问", "可以", "能", "告诉", "一下", "大概", "大约", "左右", "请",
-    "这个", "那个", "哪个", "哪里", "哪儿", "多少", "多久",
-])
-
-# ── 内存缓存 ──
-_cache: Optional[List[dict]] = None
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import DashScopeEmbeddings
 
 
-def _tokenize(text: str) -> List[str]:
-    """分词并过滤停用词和标点"""
-    words = jieba.lcut(text)
-    result = []
-    for w in words:
-        w = w.strip().lower()
-        if w and len(w) > 1 and w not in STOP_WORDS and not re.match(r'^[^\w]+$', w):
-            result.append(w)
-    return result
+# find_dotenv() 会自动向上级目录寻找 .env 文件，100% 绝对不会迷路！
+load_dotenv(find_dotenv())
 
 
-def _match_score(keywords: List[str], target_text: str) -> float:
-    """
-    计算匹配分数：命中关键词数 / 总关键词数
-    """
-    if not keywords:
-        return 0.0
-    target_lower = target_text.lower()
-    hits = sum(1 for kw in keywords if kw in target_lower)
-    return hits / len(keywords)
 
+# ==========================================
+# 1. 预热核心大脑：连接高维向量空间
+# ==========================================
+print("🗄️  [KnowledgeService] 正在连接高维空间向量数据库 (Chroma)...")
+embeddings = DashScopeEmbeddings(model="text-embedding-v3")
+# 【修复点】使用绝对路径，避免 CWD 不同导致的路径错误
+_chroma_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "chroma_db_final")
+db_chroma = Chroma(persist_directory=_chroma_dir, embedding_function=embeddings)
+# 【修复点】导出共享 retriever，避免 chat_service / recommend_service 各自创建
+retriever = db_chroma.as_retriever(search_kwargs={"k": 3})
 
-def load_cache(db: Session) -> List[dict]:
-    """
-    从数据库加载全部知识库条目到内存缓存。
-    """
-    global _cache
-    records = db.query(Knowledge).all()
-    _cache = [r.to_dict() for r in records]
-    return _cache
-
-
-def get_cache() -> List[dict]:
-    """获取当前缓存（如果未初始化则返回空列表）"""
-    global _cache
-    return _cache or []
-
-
-def refresh_cache(db: Session) -> List[dict]:
-    """刷新缓存（CUD 操作后调用）"""
-    return load_cache(db)
-
-
+# ==========================================
+# 2. 向量检索彻底替代 jieba (核心升级)
+# ==========================================
 def search_knowledge(
     db: Session,
     user_input: str,
-    threshold: float = 0.6
+    threshold: float = 0.3  # 向量距离阈值（视具体距离算法微调，0.3是个合理的默认参考）
 ) -> Tuple[Optional[dict], float, str]:
     """
-    双阶段检索的第一阶段：知识库关键词匹配。
-
-    参数：
-        db: 数据库会话
-        user_input: 用户输入文本
-        threshold: 匹配分数阈值（默认0.6）
-
-    返回：
-        (best_match, score, source)
-        - best_match: 最佳匹配的 Knowledge 字典，无匹配时为 None
-        - score: 匹配分数
-        - source: 始终为 "knowledge_base"
+    第一阶段检索：使用 Chroma 语义相似度替代原有的 jieba 关键词命中率。
     """
-    # 分词
-    keywords = _tokenize(user_input)
-    if not keywords:
-        return None, 0.0, "knowledge_base"
+    # similarity_search_with_relevance_scores 会返回 (Document, score) 元组
+    docs_with_scores = db_chroma.similarity_search_with_relevance_scores(user_input, k=1)
+    
+    if not docs_with_scores:
+        return None, 0.0, "chroma_base"
 
-    # 从缓存或数据库获取
-    records = get_cache()
-    if not records:
-        records = load_cache(db)
-    if not records:
-        return None, 0.0, "knowledge_base"
+    best_doc, score = docs_with_scores[0]
 
-    # 对每条 FAQ 计算匹配分数（问题权重 0.7，答案权重 0.3）
-    best = None
-    best_score = 0.0
-    for rec in records:
-        q_score = _match_score(keywords, rec["question"])
-        a_score = _match_score(keywords, rec["answer"])
-        score = q_score * 0.7 + a_score * 0.3
-        if score > best_score:
-            best_score = score
-            best = rec
+    # 将高维卡片伪装成原系统认识的 dict 格式，保持接口契约完美对接
+    best_match = {
+        "question": "（基于语义匹配）",
+        "answer": best_doc.page_content,
+        "spot_id": None
+    }
 
-    if best and best_score >= threshold:
-        return best, best_score, "knowledge_base"
-    return None, best_score, "knowledge_base"
+    # 如果相关度低于阈值，直接判定为未命中
+    if score < threshold:
+        return None, score, "chroma_base"
 
+    return best_match, score, "chroma_base"
 
 def get_related_records(user_input: str, top_k: int = 5) -> List[dict]:
     """
-    获取与用户输入最相关的 Top-K 条知识库记录，
-    作为 DeepSeek API 的上下文。
-
-    使用缓存数据，无需 DB 查询。
+    获取 Top-K 相关记录：不再需要循环打分排序，Chroma 底层已用最优算法完成检索。
     """
-    keywords = _tokenize(user_input)
-    records = get_cache()
-    if not records or not keywords:
-        return records[:top_k] if records else []
+    docs = db_chroma.similarity_search(user_input, k=top_k)
+    
+    result = []
+    for doc in docs:
+        result.append({
+            "question": "（基于语义匹配）",
+            "answer": doc.page_content
+        })
+    return result
 
-    # 按分数排序取 Top-K
-    scored = []
-    for rec in records:
-        score = _match_score(keywords, rec["question"]) * 0.7 + \
-                _match_score(keywords, rec["answer"]) * 0.3
-        if score > 0:
-            scored.append((score, rec))
+# ==========================================
+# 3. 向后兼容层 (保证后台管理面板不崩溃)
+# ==========================================
+# 因为现在所有大模型检索都已经物理隔离到了 ChromaDB (Word解析)
+# 管理员在 Web 界面对 SQLite 的修改暂时不会影响大模型。
+# 保留以下空函数，确保 app.py 的路由和前端后台不出 500 报错。
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [rec for _, rec in scored[:top_k]]
+def load_cache(db: Session) -> List[dict]:
+    return []
+
+def get_cache() -> List[dict]:
+    return []
+
+def refresh_cache(db: Session) -> List[dict]:
+    return []

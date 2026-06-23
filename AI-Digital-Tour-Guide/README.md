@@ -4,16 +4,16 @@
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 后端 | Python / FastAPI / SQLAlchemy ORM |
-| 数据库 | SQLite（本地）/ MySQL（生产） |
-| 前端 | TailwindCSS / ECharts / 原生 JS |
-| 数字人 | easy-live2d（Live2D 渲染 + 口型同步） |
+| 层级 | 技术                                    |
+|------|---------------------------------------|
+| 后端 | Python / FastAPI                      |
+| 数据库 | Chroma/SQLite（本地）/ MySQL（生产）          |
+| 前端 | TailwindCSS / ECharts / 原生 JS         |
+| 数字人 | easy-live2d（Live2D 渲染 + 口型同步）         |
 | 语音 | Web Speech API（识别）+ SpeechSynthesis（合成） |
-| 大模型 | DeepSeek API（RAG 兜底） |
-| 分词 | jieba |
-| 部署 | Render.com |
+| 大模型 | DeepSeek API（RAG 兜底）/阿里               |
+| 分词 |  LangChain 的 RecursiveCharacterTextSplitter                                       |
+| 部署 | Render.com                            |
 
 ## 快速开始
 

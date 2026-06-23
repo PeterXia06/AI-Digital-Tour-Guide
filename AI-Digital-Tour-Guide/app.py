@@ -2,15 +2,17 @@ import os
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from urllib.parse import quote
 from sqlalchemy.orm import Session
 from datetime import date, datetime
 
-from config import APP_TITLE, APP_VERSION
+from config import APP_TITLE, APP_VERSION, ADMIN_SECRET_KEY
 from database import get_db, init_db
 from models import Knowledge, Spot, Route, Conversation, Stat, AvatarConfig
 from services.knowledge_service import refresh_cache, load_cache, get_cache
 from services.chat_service import process_chat
+from services.tts_service import text_to_speech
 from services.stats_service import (
     get_dashboard_data, get_report_data,
     get_today_stats, get_week_service_trend,
@@ -22,13 +24,14 @@ from services.recommendation_service import get_recommendations
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
 # ── 注册 Admin 鉴权中间件 ──
+# 需要游客端公开访问的接口加入 ALLOWLIST
+_ADMIN_ALLOWLIST = {"/api/admin/verify", "/api/admin/avatar", "/api/admin/models"}
+
 @app.middleware("http")
 async def admin_auth(request: Request, call_next):
-    # 仅拦截 /api/admin 路径，放行 verify 接口本身
     path = request.url.path
-    if path.startswith("/api/admin") and path != "/api/admin/verify":
+    if path.startswith("/api/admin") and path not in _ADMIN_ALLOWLIST:
         token = request.headers.get("X-Admin-Token", "")
-        from config import ADMIN_SECRET_KEY
         if token != ADMIN_SECRET_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=403, content={"detail": "Forbidden: Invalid admin token"})
@@ -87,7 +90,27 @@ async def chat(
 
     # 这里的 process_chat 已经是你写好的超级大模型版本了！
     result = await process_chat(db, session_id, message)
+    # 附加 TTS 音频 URL
+    answer = result.get("answer", "")
+    if answer:
+        result["audio_url"] = f"/api/tts?text={quote(answer)}"
     return result
+
+@app.get("/api/tts")
+async def tts(text: str = Query(..., description="要合成语音的文本")):
+    """
+    TTS 语音合成接口 (GET)
+    示例: /api/tts?text=你好欢迎来到灵山
+    Returns: audio/mpeg
+    """
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="文本不能为空")
+    try:
+        audio_bytes = await text_to_speech(text)
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/recommend")
 async def recommend(
@@ -147,7 +170,11 @@ async def init_data(db: Session = Depends(get_db)):
 # ═══════════════════════════════════════════════════════
 
 @app.post("/api/admin/verify")
-async def admin_verify():
+async def admin_verify(request: Request):
+    """【修复点】实际验证 Admin Token，不再永远返回 True"""
+    token = request.headers.get("X-Admin-Token", "")
+    if token != ADMIN_SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid admin token")
     return {"valid": True}
 
 @app.get("/api/admin/knowledge")
@@ -254,13 +281,14 @@ async def admin_dashboard(db: Session = Depends(get_db)):
 async def admin_avatar_get(db: Session = Depends(get_db)):
     config = db.query(AvatarConfig).first()
     if not config:
+        # 【默认配置】如果没有保存过配置，自动加载 hiyori 模型
         return {
-            "model_name": "",
-            "model_url": "",
+            "model_name": "hiyori",
+            "model_url": "/static/models/hiyori/model.json",
             "voice_name": "",
             "greeting": "欢迎来到灵山胜境！我是您的AI导游小灵，有什么可以帮您的吗？",
-            "scale": 1.0,
-            "is_active": False,
+            "scale": 0.18,
+            "is_active": True,
         }
     return config.to_dict()
 
@@ -280,15 +308,18 @@ async def admin_avatar_update(data: dict, db: Session = Depends(get_db)):
 
 @app.get("/api/admin/models")
 async def admin_models():
+    """【模板化】扫描 static/models/**/model.json 自动发现数字人模型"""
     import glob
     models_dir = os.path.join(static_dir, "models")
-    pattern = os.path.join(models_dir, "**", "*.model3.json")
+    pattern = os.path.join(models_dir, "**", "model.json")
     model_files = glob.glob(pattern, recursive=True)
 
     models = []
     for f in model_files:
+        # f 形如 static/models/hiyori/model.json
+        model_dir = os.path.dirname(f)
+        name = os.path.basename(model_dir)  # 模型目录名即模型名称
         rel_path = os.path.relpath(f, static_dir).replace("\\", "/")
-        name = os.path.basename(os.path.dirname(f))
         models.append({"name": name, "url": f"/static/{rel_path}"})
 
     return {"models": models}
@@ -300,6 +331,7 @@ async def admin_spots(db: Session = Depends(get_db)):
 
 @app.put("/api/admin/spots/{spot_id}")
 async def admin_spot_update(spot_id: int, data: dict, db: Session = Depends(get_db)):
+    """【注意】spot_id 是数据库自增主键 (Spot.id)，不是业务编号 (Spot.spot_id)"""
     spot = db.query(Spot).filter(Spot.id == spot_id).first()
     if not spot:
         raise HTTPException(status_code=404, detail="景点不存在")

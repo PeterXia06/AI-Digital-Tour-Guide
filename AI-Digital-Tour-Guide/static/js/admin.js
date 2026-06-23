@@ -215,13 +215,19 @@ async function loadAvatarConfig() {
         if (modelSelect) {
             modelSelect.innerHTML = '<option value=\"\">不使用 Live2D</option>' + modelsData.models.map(function(m) { return '<option value=\"' + m.url + '\">' + m.name + '</option>'; }).join('');
         }
+        // 【修复点】语音列表异步加载，增加 onvoiceschanged 监听
         if (window.speechSynthesis) {
-            var voices = speechSynthesis.getVoices();
-            var zhVoices = voices.filter(function(v) { return v.lang.indexOf('zh') === 0; });
             var voiceSelect = document.getElementById('av-voice');
-            if (voiceSelect && zhVoices.length) {
-                voiceSelect.innerHTML = zhVoices.map(function(v) { return '<option value=\"' + v.name + '\">' + v.name + '</option>'; }).join('');
-            }
+            var loadVoices = function() {
+                var voices = speechSynthesis.getVoices();
+                var zhVoices = voices.filter(function(v) { return v.lang.indexOf('zh') === 0; });
+                if (voiceSelect && zhVoices.length) {
+                    voiceSelect.innerHTML = zhVoices.map(function(v) { return '<option value=\"' + v.name + '\">' + v.name + '</option>'; }).join('');
+                }
+            };
+            loadVoices();
+            // Chrome 等浏览器异步加载语音，监听事件触发二次加载
+            speechSynthesis.onvoiceschanged = loadVoices;
         }
         var resp = await adminFetch(API_BASE + '/avatar');
         var config = await resp.json();
