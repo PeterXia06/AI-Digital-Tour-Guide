@@ -42,8 +42,10 @@ AI-Digital-Tour-Guide/static/lib/live2dcubismcore.min.js
 AI-Digital-Tour-Guide/static/lib/pixi-sound-stub.js
 AI-Digital-Tour-Guide/static/lib/pixi-sound.es.js
 
-# ── 模型资源（二进制大文件）──
-AI-Digital-Tour-Guide/resources/
+# ── 模型资源 — 已提交
+
+# ── TTS 运行时生成的音频文件 ──
+AI-Digital-Tour-Guide/static/audio/
 
 # ── 项目文档（非代码）──
 *.docx
